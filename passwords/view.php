@@ -8,9 +8,10 @@ requirePermission('passwords.view');
 $id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
 
 $stmt = $db->prepare(
-    'SELECT p.*, u.username AS assigned_username, u.full_name AS assigned_full_name
+    'SELECT p.*, u.username AS assigned_username, u.full_name AS assigned_full_name, pj.name AS project_name
        FROM passwords p
        LEFT JOIN users u ON u.id = p.assigned_to
+       LEFT JOIN projects pj ON pj.id = p.project_id
       WHERE p.id = :id'
 );
 $stmt->execute(['id' => $id]);
@@ -53,6 +54,9 @@ require __DIR__ . '/../includes/header.php';
     <dl class="detail-list">
         <dt>Category</dt>
         <dd><?= e($item['category'] ?: '—') ?></dd>
+
+        <dt>Project</dt>
+        <dd><?= e($item['project_name'] ?: '—') ?></dd>
 
         <dt>Username / Email</dt>
         <dd><?= e($item['username'] ?: '—') ?></dd>

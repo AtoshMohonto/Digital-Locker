@@ -17,6 +17,13 @@ if ($id === (int) currentUser()['id']) {
     redirect(BASE_URL . '/users/index.php');
 }
 
+$roleStmt = $db->prepare("SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = :id AND r.name = 'Administrator'");
+$roleStmt->execute(['id' => $id]);
+if ($roleStmt->fetchColumn() && activeAdministratorCount($id) === 0) {
+    flash('error', 'You cannot delete the last active Administrator account.');
+    redirect(BASE_URL . '/users/index.php');
+}
+
 $stmt = $db->prepare('DELETE FROM users WHERE id = :id');
 $stmt->execute(['id' => $id]);
 

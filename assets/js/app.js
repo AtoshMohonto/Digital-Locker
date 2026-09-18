@@ -26,6 +26,12 @@
         setExpanded(false);
     }
 
+    /* Icon-rail (collapsed) mode hides group labels, so every group must stay
+       expanded -- otherwise a closed <details> would hide its own icons too. */
+    function openAllSidebarGroups() {
+        document.querySelectorAll('.sidebar__group').forEach(function (d) { d.open = true; });
+    }
+
     if (sidebarToggle) {
         sidebarToggle.addEventListener('click', function () {
             if (isMobile()) {
@@ -33,6 +39,9 @@
                 setExpanded(open);
             } else {
                 var collapsed = body.classList.toggle('sidebar-collapsed');
+                if (collapsed) {
+                    openAllSidebarGroups();
+                }
                 try {
                     localStorage.setItem('sidebar-collapsed', collapsed ? '1' : '0');
                 } catch (e) { /* private mode */ }
@@ -55,6 +64,7 @@
         if (localStorage.getItem('sidebar-collapsed') === '1' && !isMobile()) {
             body.classList.add('sidebar-collapsed');
             setExpanded(false);
+            openAllSidebarGroups();
         }
     } catch (e) { /* ignore */ }
 
@@ -64,6 +74,39 @@
             body.classList.remove('sidebar-open');
         }
     });
+
+    /* ------------------------------------------------------------------
+     * Topbar user menu (avatar dropdown)
+     * ------------------------------------------------------------------ */
+    var userMenu = document.getElementById('user-menu');
+    var userMenuToggle = document.getElementById('user-menu-toggle');
+
+    function closeUserMenu() {
+        if (userMenu) {
+            userMenu.classList.remove('is-open');
+        }
+        if (userMenuToggle) {
+            userMenuToggle.setAttribute('aria-expanded', 'false');
+        }
+    }
+
+    if (userMenuToggle && userMenu) {
+        userMenuToggle.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var open = userMenu.classList.toggle('is-open');
+            userMenuToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+        document.addEventListener('click', function (e) {
+            if (!userMenu.contains(e.target)) {
+                closeUserMenu();
+            }
+        });
+        window.addEventListener('keyup', function (e) {
+            if (e.key === 'Escape') {
+                closeUserMenu();
+            }
+        });
+    }
 
     /* ------------------------------------------------------------------
      * Password generator

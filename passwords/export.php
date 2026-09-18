@@ -9,10 +9,11 @@ requirePermission('passwords.view');
 
 $stmt = $db->query(
     'SELECT p.id, p.title, p.category, p.username, p.encrypted, p.url, p.notes, p.extra_info,
-            u.username AS assigned_username, u.full_name AS assigned_full_name,
+            u.username AS assigned_username, u.full_name AS assigned_full_name, pj.name AS project_name,
             GROUP_CONCAT(r.name ORDER BY r.name SEPARATOR "; ") AS role_names
        FROM passwords p
        LEFT JOIN users u ON u.id = p.assigned_to
+       LEFT JOIN projects pj ON pj.id = p.project_id
        LEFT JOIN password_roles pr ON pr.password_id = p.id
        LEFT JOIN roles r ON r.id = pr.role_id
       GROUP BY p.id
@@ -41,7 +42,7 @@ function csvSafe(string $value): string
     return preg_match('/^[=+\-@\t\r]/', $value) === 1 ? "'" . $value : $value;
 }
 
-$headers = ['title', 'category', 'username', 'password', 'url', 'notes', 'recovery_info', 'assigned_to', 'access_roles'];
+$headers = ['title', 'category', 'project', 'username', 'password', 'url', 'notes', 'recovery_info', 'assigned_to', 'access_roles'];
 fputcsv($out, $headers);
 
 foreach ($stmt->fetchAll() as $row) {
@@ -54,6 +55,7 @@ foreach ($stmt->fetchAll() as $row) {
     fputcsv($out, array_map('csvSafe', [
         $row['title'],
         $row['category'],
+        (string) $row['project_name'],
         $row['username'],
         $allowed ? (string) decrypt_password($row['encrypted'], $appConfig) : '(restricted)',
         $row['url'],

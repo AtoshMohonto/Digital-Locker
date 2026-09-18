@@ -32,9 +32,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($old['email'] === '' || !filter_var($old['email'], FILTER_VALIDATE_EMAIL)) {
             $errors[] = 'A valid email address is required.';
         }
-        if (validatePasswordPolicy($old['password'], effectivePolicy())) {
-            $errors = array_merge($errors, validatePasswordPolicy($old['password'], effectivePolicy()));
-        }
+        $errors = array_merge($errors, validatePasswordPolicy($old['password'], effectivePolicy()));
 
         if (!$errors) {
             try {

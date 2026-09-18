@@ -10,7 +10,7 @@ requirePermission('passwords.manage');
 $pageTitle = 'Import CSV';
 $activePage = 'passwords';
 
-const CSV_COLUMNS = ['title', 'category', 'username', 'password', 'url', 'notes', 'recovery_info', 'assigned_to', 'access_roles'];
+const CSV_COLUMNS = ['title', 'category', 'project', 'username', 'password', 'url', 'notes', 'recovery_info', 'assigned_to', 'access_roles'];
 const MAX_ROWS = 2000;
 
 function sendTemplate(): void
@@ -21,7 +21,7 @@ function sendTemplate(): void
     fwrite($out, "\xEF\xBB\xBF");
     fputcsv($out, CSV_COLUMNS);
     fputcsv($out, [
-        'App Server (Production)', 'Server', 'root', 'Str0ng!Pa55', '10.0.0.15',
+        'App Server (Production)', 'Server', 'Infrastructure', 'root', 'Str0ng!Pa55', '10.0.0.15',
         'Created via CSV import', 'Recovery code: ABC-123', '', 'Administrator',
     ]);
     fclose($out);
@@ -48,10 +48,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'confi
         redirect(BASE_URL . '/passwords/import.php');
     }
 
-    $userCache = [];
-    $roleCache = [];
-    $imported  = 0;
-    $skipped   = 0;
+    $userCache    = [];
+    $roleCache    = [];
+    $projectCache = [];
+    $imported = 0;
+    $skipped  = 0;
+
+    $findProject = function (string $name) use ($db, &$projectCache): ?int {
+        $name = trim($name);
+        if ($name === '') {
+            return null;
+        }
+        if (isset($projectCache[$name])) {
+            return $projectCache[$name];
+        }
+        $stmt = $db->prepare('SELECT id FROM projects WHERE name = :name');
+        $stmt->execute(['name' => $name]);
+        $id = $stmt->fetchColumn();
+        if ($id === false) {
+            $stmt = $db->prepare('INSERT INTO projects (name) VALUES (:name)');
+            $stmt->execute(['name' => $name]);
+            $id = $db->lastInsertId();
+        }
+        $projectCache[$name] = (int) $id;
+        return $projectCache[$name];
+    };
 
     $findUser = function (string $name) use ($db, &$userCache): ?int {
         $name = trim($name);
@@ -61,8 +82,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'confi
         if (isset($userCache[$name])) {
             return $userCache[$name];
         }
-        $stmt = $db->prepare('SELECT id FROM users WHERE username = :name OR full_name = :name');
-        $stmt->execute(['name' => $name]);
+        $stmt = $db->prepare('SELECT id FROM users WHERE username = :name1 OR full_name = :name2');
+        $stmt->execute(['name1' => $name, 'name2' => $name]);
         $id = $stmt->fetchColumn();
         $userCache[$name] = $id === false ? null : (int) $id;
         return $userCache[$name];
@@ -89,8 +110,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'confi
     };
 
     $insert = $db->prepare(
-        'INSERT INTO passwords (title, category, username, encrypted, url, notes, extra_info, assigned_to, created_by)
-         VALUES (:title, :category, :username, :encrypted, :url, :notes, :extra_info, :assigned_to, :created_by)'
+        'INSERT INTO passwords (title, category, project_id, username, encrypted, url, notes, extra_info, assigned_to, created_by)
+         VALUES (:title, :category, :project_id, :username, :encrypted, :url, :notes, :extra_info, :assigned_to, :created_by)'
     );
     $insertRole = $db->prepare('INSERT IGNORE INTO password_roles (password_id, role_id) VALUES (:pid, :rid)');
 
@@ -107,6 +128,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'confi
             $insert->execute([
                 'title'       => trim($row['title']),
                 'category'    => trim($row['category']),
+                'project_id'  => $findProject($row['project']),
                 'username'    => trim($row['username']),
                 'encrypted'   => encrypt_password($row['password'], $appConfig),
                 'url'         => trim($row['url']),
@@ -176,6 +198,7 @@ if (isset($_GET['preview'])) {
                         <th><input type="checkbox" id="check-all" checked></th>
                         <th>Title</th>
                         <th>Category</th>
+                        <th>Project</th>
                         <th>Username</th>
                         <th>Assigned To</th>
                         <th>Access Roles</th>
@@ -190,6 +213,7 @@ if (isset($_GET['preview'])) {
                         <td><input type="checkbox" name="rows[]" value="<?= (int) $index ?>" <?= $invalid ? '' : 'checked' ?>></td>
                         <td><?= e($row['title']) ?><?= $invalid ? ' <span class="badge badge--danger">skip</span>' : '' ?></td>
                         <td><?= e($row['category']) ?: '—' ?></td>
+                        <td><?= e($row['project']) ?: '—' ?></td>
                         <td><?= e($row['username']) ?></td>
                         <td><?= e($row['assigned_to']) ?: '—' ?></td>
                         <td><?= e($row['access_roles']) ?: '—' ?></td>
@@ -297,10 +321,11 @@ require __DIR__ . '/../includes/header.php';
 
     <p class="muted">
         Expected columns (header optional):
-        <code>title, category, username, password, url, notes, recovery_info, assigned_to, access_roles</code>.
-        <code>assigned_to</code> is matched by username or full name; <code>access_roles</code> accepts one or more
-        role names separated by <code>;</code> (e.g. <code>Administrator; Manager</code>) — this matches the
-        format produced by Export CSV, so exported files can be re-imported as-is.
+        <code>title, category, project, username, password, url, notes, recovery_info, assigned_to, access_roles</code>.
+        <code>project</code> is created automatically when the name is new; <code>assigned_to</code> is matched by
+        username or full name; <code>access_roles</code> accepts one or more role names separated by <code>;</code>
+        (e.g. <code>Administrator; Manager</code>) — this matches the format produced by Export CSV, so exported
+        files can be re-imported as-is.
         Download the <a href="import.php?template=1">CSV template</a> to see the format.
     </p>
 

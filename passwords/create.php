@@ -10,6 +10,7 @@ $activePage = 'passwords';
 
 $roles      = $db->query('SELECT id, name FROM roles ORDER BY name')->fetchAll();
 $users      = $db->query('SELECT id, username, full_name FROM users WHERE is_active = 1 ORDER BY username')->fetchAll();
+$projects   = $db->query('SELECT id, name FROM projects ORDER BY name')->fetchAll();
 $categories = categoryOptions();
 
 $errors = [];
@@ -22,6 +23,7 @@ $old = [
     'notes'       => '',
     'extra_info'  => '',
     'assigned_to' => 0,
+    'project_id'  => 0,
 ];
 $selectedRoles = [];
 
@@ -38,6 +40,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'notes'       => trim($_POST['notes'] ?? ''),
             'extra_info'  => trim($_POST['extra_info'] ?? ''),
             'assigned_to' => (int) ($_POST['assigned_to'] ?? 0),
+            'project_id'  => (int) ($_POST['project_id'] ?? 0),
         ];
         $validRoleIds = array_column($roles, 'id');
         $selectedRoles = array_intersect(array_map('intval', $_POST['roles'] ?? []), $validRoleIds);
@@ -57,8 +60,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $db->beginTransaction();
 
             $stmt = $db->prepare(
-                'INSERT INTO passwords (title, category, username, encrypted, url, notes, extra_info, assigned_to, created_by)
-                 VALUES (:title, :category, :username, :encrypted, :url, :notes, :extra_info, :assigned_to, :created_by)'
+                'INSERT INTO passwords (title, category, username, encrypted, url, notes, extra_info, assigned_to, project_id, created_by)
+                 VALUES (:title, :category, :username, :encrypted, :url, :notes, :extra_info, :assigned_to, :project_id, :created_by)'
             );
             $stmt->execute([
                 'title'       => $old['title'],
@@ -69,6 +72,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'notes'      => $old['notes'] !== '' ? $old['notes'] : null,
                 'extra_info' => $old['extra_info'] !== '' ? encrypt_password($old['extra_info'], $appConfig) : null,
                 'assigned_to' => $old['assigned_to'] > 0 ? $old['assigned_to'] : null,
+                'project_id'  => $old['project_id'] > 0 ? $old['project_id'] : null,
                 'created_by' => currentUser()['id'],
             ]);
             $passwordId = (int) $db->lastInsertId();
@@ -119,15 +123,25 @@ require __DIR__ . '/../includes/header.php';
                 </select>
             </div>
             <div class="form-group">
-                <label>Access Level <span class="muted">(who can see this)</span></label>
-                <?php foreach ($roles as $r): ?>
-                    <label class="checkbox">
-                        <input type="checkbox" name="roles[]" value="<?= (int) $r['id'] ?>"
-                               <?= in_array((int) $r['id'], $selectedRoles, true) ? 'checked' : '' ?>>
-                        <span><?= e(accessLabel($r['name'])) ?></span>
-                    </label>
-                <?php endforeach; ?>
+                <label for="project_id">Project</label>
+                <select id="project_id" name="project_id">
+                    <option value="0">— None —</option>
+                    <?php foreach ($projects as $p): ?>
+                        <option value="<?= (int) $p['id'] ?>" <?= $old['project_id'] === (int) $p['id'] ? 'selected' : '' ?>><?= e($p['name']) ?></option>
+                    <?php endforeach; ?>
+                </select>
             </div>
+        </div>
+
+        <div class="form-group">
+            <label>Access Level <span class="muted">(who can see this)</span></label>
+            <?php foreach ($roles as $r): ?>
+                <label class="checkbox">
+                    <input type="checkbox" name="roles[]" value="<?= (int) $r['id'] ?>"
+                           <?= in_array((int) $r['id'], $selectedRoles, true) ? 'checked' : '' ?>>
+                    <span><?= e(accessLabel($r['name'])) ?></span>
+                </label>
+            <?php endforeach; ?>
         </div>
 
         <div class="form-group">

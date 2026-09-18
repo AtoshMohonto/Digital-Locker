@@ -25,6 +25,7 @@ $roles = $db->query('SELECT id, name FROM roles ORDER BY name')->fetchAll();
 $stmt = $db->prepare('SELECT role_id FROM user_roles WHERE user_id = :uid');
 $stmt->execute(['uid' => $id]);
 $selectedRoles = array_map('intval', array_column($stmt->fetchAll(), 'role_id'));
+$wasAdministrator = (int) $item['is_active'] === 1 && in_array(1, $selectedRoles, true);
 
 $errors = [];
 $old = [
@@ -54,11 +55,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($old['email'] === '' || !filter_var($old['email'], FILTER_VALIDATE_EMAIL)) {
             $errors[] = 'A valid email address is required.';
         }
-        if ($old['password'] !== '' && validatePasswordPolicy($old['password'], effectivePolicy())) {
+        if ($old['password'] !== '') {
             $errors = array_merge($errors, validatePasswordPolicy($old['password'], effectivePolicy()));
         }
         if ($isSelf && $old['is_active'] === 0) {
             $errors[] = 'You cannot disable your own account.';
+        }
+
+        $willStayAdministrator = $old['is_active'] === 1 && in_array(1, $selectedRoles, true);
+        if ($wasAdministrator && !$willStayAdministrator && activeAdministratorCount($id) === 0) {
+            $errors[] = 'You cannot remove, disable, or strip Administrator from the last active Administrator account.';
         }
 
         if (!$errors) {

@@ -24,10 +24,32 @@ function baseUrl(array $config): string
         $path = str_replace('\\', '/', substr($appDir, strlen($docRoot)));
     }
 
-    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-    $host   = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $scheme = 'http';
+    if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
+        $scheme = 'https';
+    } elseif (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+        $scheme = 'https';
+    } elseif (!empty($_SERVER['HTTP_X_FORWARDED_SSL']) && $_SERVER['HTTP_X_FORWARDED_SSL'] === 'on') {
+        $scheme = 'https';
+    }
+
+    $host = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost';
 
     return $scheme . '://' . $host . $path;
+}
+
+/**
+ * URL for a static asset (under /assets), cache-busted with the file's
+ * mtime so an edited style.css/app.js is picked up immediately instead of
+ * being served stale from the browser's cache on returning visits.
+ */
+function assetUrl(string $relativePath): string
+{
+    $relativePath = '/' . ltrim($relativePath, '/');
+    $diskPath = __DIR__ . '/..' . $relativePath;
+    $version = is_file($diskPath) ? filemtime($diskPath) : time();
+
+    return BASE_URL . $relativePath . '?v=' . $version;
 }
 
 /**

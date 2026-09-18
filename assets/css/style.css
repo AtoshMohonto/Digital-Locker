@@ -118,7 +118,14 @@ a:hover { text-decoration: underline; }
     scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
 }
 
-.sidebar__section-label {
+/* Collapsible section groups (details/summary), like myself's sidebar accordion. */
+.sidebar__group { margin-bottom: 2px; }
+.sidebar__group:first-of-type .sidebar__group-label { padding-top: 6px; }
+
+.sidebar__group-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     text-transform: uppercase;
     font-size: 0.66rem;
     font-weight: 700;
@@ -126,9 +133,27 @@ a:hover { text-decoration: underline; }
     color: rgba(148, 163, 184, 0.6);
     padding: 16px 12px 6px;
     white-space: nowrap;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    transition: color 0.15s ease;
 }
 
-.sidebar__section-label:first-child { padding-top: 6px; }
+.sidebar__group-label::-webkit-details-marker { display: none; }
+
+.sidebar__group-label::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform 0.15s ease;
+    flex-shrink: 0;
+}
+
+.sidebar__group[open] > .sidebar__group-label::before { transform: rotate(45deg); }
+.sidebar__group-label:hover { color: rgba(255, 255, 255, 0.75); }
 
 .sidebar__link {
     position: relative;
@@ -180,17 +205,31 @@ a:hover { text-decoration: underline; }
 
 /* --- Collapsed state (desktop) ------------------------------------------ */
 body.sidebar-collapsed .sidebar { width: var(--sidebar-width-collapsed); }
+/* width:0 (not just opacity:0) removes the label from flex flow -- otherwise
+   its full (invisible) width still counts toward centering the row, which
+   shoves the icon off to the side since justify-content:center balances
+   icon + invisible-but-still-wide text as one group. */
 body.sidebar-collapsed .sidebar__link-text,
-body.sidebar-collapsed .sidebar__brand-text,
-body.sidebar-collapsed .sidebar__section-label { opacity: 0; }
-body.sidebar-collapsed .sidebar__link { justify-content: center; padding-left: 0; padding-right: 0; }
+body.sidebar-collapsed .sidebar__brand-text {
+    opacity: 0;
+    width: 0;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+body.sidebar-collapsed .sidebar__group-label { opacity: 0; }
+body.sidebar-collapsed .sidebar__link { justify-content: center; padding-left: 0; padding-right: 0; gap: 0; }
 body.sidebar-collapsed .sidebar__link::before { left: 0; }
-body.sidebar-collapsed .sidebar__brand { justify-content: center; padding-left: 0; padding-right: 0; }
-body.sidebar-collapsed .sidebar__section-label { text-align: center; padding-left: 0; padding-right: 0; }
+body.sidebar-collapsed .sidebar__brand { justify-content: center; padding-left: 0; padding-right: 0; gap: 0; }
+body.sidebar-collapsed .sidebar__group-label { height: 0; padding: 0; pointer-events: none; }
 
 /* --- Main area ----------------------------------------------------------- */
 .main {
     flex: 1;
+    min-width: 0; /* flex items default to min-width:auto, which lets wide content
+                     (e.g. a nowrap table header) push the whole page wider than the
+                     viewport instead of scrolling inside .table-wrap as intended. */
     margin-left: var(--sidebar-width);
     display: flex;
     flex-direction: column;
@@ -246,8 +285,78 @@ body.sidebar-collapsed .main { margin-left: var(--sidebar-width-collapsed); }
     letter-spacing: -0.01em;
 }
 
-.topbar__user { display: flex; align-items: center; gap: 10px; }
+.topbar__user { position: relative; }
+
+.topbar__user-btn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px 6px 14px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.topbar__user-btn:hover,
+.topbar__user.is-open .topbar__user-btn {
+    background: var(--surface-soft);
+    border-color: var(--border);
+}
+
 .topbar__user-name { font-weight: 600; font-size: 0.92rem; }
+
+.topbar__avatar {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--primary), #8b5cf6);
+    color: #fff;
+    font-weight: 700;
+    font-size: 0.8rem;
+    letter-spacing: 0;
+}
+
+.topbar__dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    min-width: 220px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    padding: 6px;
+    z-index: 50;
+}
+
+.topbar__user.is-open .topbar__dropdown { display: block; }
+
+.topbar__dropdown-header { padding: 10px 12px 12px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+.topbar__dropdown-name { font-weight: 700; font-size: 0.92rem; }
+.topbar__dropdown-email { color: var(--text-muted); font-size: 0.8rem; margin-top: 2px; word-break: break-all; }
+.topbar__dropdown-roles { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+.topbar__dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: 0.88rem;
+    font-weight: 500;
+}
+
+.topbar__dropdown-item:hover { background: var(--surface-soft); text-decoration: none; }
+.topbar__dropdown-item .icon { width: 17px; height: 17px; color: var(--text-muted); }
 
 /* --- Backdrop (mobile) --------------------------------------------------- */
 .sidebar-backdrop {
@@ -330,6 +439,49 @@ body.sidebar-collapsed .main { margin-left: var(--sidebar-width-collapsed); }
 
 .quick-actions { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .quick-actions--row { flex-direction: row; flex-wrap: wrap; align-items: center; }
+
+/* --- Collapsible groups (Credential Vault: group by project/category/role) */
+.vault-group {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 14px;
+    overflow: hidden;
+}
+
+.vault-group__summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 16px;
+    background: var(--surface-soft);
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 0.95rem;
+    list-style: none;
+    user-select: none;
+}
+
+.vault-group__summary::-webkit-details-marker { display: none; }
+
+.vault-group__summary::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-right: 2px solid var(--text-muted);
+    border-bottom: 2px solid var(--text-muted);
+    transform: rotate(-45deg);
+    transition: transform 0.15s ease;
+    margin-right: 4px;
+    flex-shrink: 0;
+}
+
+.vault-group[open] > .vault-group__summary::before { transform: rotate(45deg); }
+
+.vault-group__summary:hover { background: var(--primary-soft); }
+
+.vault-group .table-wrap { border-top: 1px solid var(--border); }
+.vault-group .table { font-size: 0.88rem; }
 
 /* --- Tables -------------------------------------------------------------- */
 .table-wrap { overflow-x: auto; }
@@ -531,6 +683,67 @@ textarea { resize: vertical; }
     font-size: 0.7rem;
 }
 
+/* --- Credential grid (Project detail: role-based credentials as cards) --- */
+.credential-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 18px;
+}
+
+.credential-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.credential-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+
+.credential-card--restricted { background: var(--surface-soft); opacity: 0.75; }
+
+.credential-card__header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.credential-card__icon { font-size: 1.2rem; flex-shrink: 0; }
+
+.credential-card__title {
+    font-weight: 700;
+    font-size: 0.98rem;
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+
+.credential-card__title:hover { color: var(--primary); }
+
+.credential-card__meta { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.credential-card__fields {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 10px;
+    margin: 0;
+    font-size: 0.86rem;
+}
+
+.credential-card__fields dt { font-weight: 600; color: var(--text-muted); }
+.credential-card__fields dd { margin: 0; word-break: break-word; }
+
+.credential-card__actions {
+    display: flex;
+    gap: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    margin-top: 2px;
+}
+
 /* --- Empty state --------------------------------------------------------- */
 .empty-state {
     text-align: center;
@@ -621,16 +834,23 @@ textarea { resize: vertical; }
 
     /* In collapsed state the icons stay full on mobile */
     body.sidebar-collapsed .sidebar__link-text,
-    body.sidebar-collapsed .sidebar__brand-text,
-    body.sidebar-collapsed .sidebar__section-label { opacity: 1; }
-    body.sidebar-collapsed .sidebar__link { justify-content: flex-start; padding-left: 12px; padding-right: 12px; }
-    body.sidebar-collapsed .sidebar__brand { justify-content: flex-start; padding-left: 22px; padding-right: 22px; }
+    body.sidebar-collapsed .sidebar__brand-text {
+        opacity: 1;
+        width: auto;
+        margin: 0;
+        padding: 0;
+        overflow: visible;
+    }
+    body.sidebar-collapsed .sidebar__group-label { opacity: 1; height: auto; padding: 16px 12px 6px; pointer-events: auto; }
+    body.sidebar-collapsed .sidebar__link { justify-content: flex-start; padding-left: 12px; padding-right: 12px; gap: 12px; }
+    body.sidebar-collapsed .sidebar__brand { justify-content: flex-start; padding-left: 22px; padding-right: 22px; gap: 12px; }
 
     .content { padding: 18px; }
     .card { padding: 18px; }
     .detail-list { grid-template-columns: 1fr; gap: 2px 0; }
     .detail-list dt { margin-top: 10px; }
     .topbar__user-name { display: none; }
+    .topbar__user-btn { padding: 6px; }
     .topbar { padding: 10px 16px; }
 }
 

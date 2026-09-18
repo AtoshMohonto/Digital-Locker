@@ -120,3 +120,26 @@ function isAdministrator(): bool
     }
     return false;
 }
+
+/**
+ * How many active users currently hold the Administrator role, optionally
+ * excluding one user id. Used to stop an edit/delete/disable from leaving
+ * the vault with zero administrators (an unrecoverable lockout).
+ */
+function activeAdministratorCount(?int $excludeUserId = null): int
+{
+    global $db;
+    $sql = "SELECT COUNT(DISTINCT u.id)
+              FROM users u
+              JOIN user_roles ur ON ur.user_id = u.id
+              JOIN roles r ON r.id = ur.role_id
+             WHERE r.name = 'Administrator' AND u.is_active = 1";
+    $params = [];
+    if ($excludeUserId !== null) {
+        $sql .= ' AND u.id != :exclude';
+        $params['exclude'] = $excludeUserId;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    return (int) $stmt->fetchColumn();
+}

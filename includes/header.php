@@ -20,6 +20,36 @@ function isActive(string $name, string $current): string
     return $name === $current ? ' active' : '';
 }
 
+/**
+ * Sidebar nav: Dashboard is a standalone always-visible link (like myself's
+ * layout), the rest live in collapsible sections -- all start expanded so
+ * nothing is ever hidden by default; collapsing a section is purely a
+ * user choice, not something that happens automatically based on the page.
+ */
+function sidebarGroups(): array
+{
+    return [
+        'vault' => ['label' => 'Vault', 'items' => [
+            ['key' => 'passwords', 'href' => '/passwords/index.php', 'icon' => 'passwords', 'label' => 'Credential Vault', 'show' => hasPermission('passwords.view')],
+            ['key' => 'personal', 'href' => '/personal/index.php', 'icon' => 'personal', 'label' => 'Personal Vault', 'show' => true],
+            ['key' => 'tools', 'href' => '/tools/index.php', 'icon' => 'export', 'label' => 'Import / Export', 'show' => true],
+            ['key' => 'projects', 'href' => '/projects/index.php', 'icon' => 'projects', 'label' => 'Projects', 'show' => hasPermission('projects.manage')],
+        ]],
+        'administration' => ['label' => 'Administration', 'items' => [
+            ['key' => 'roles', 'href' => '/roles/index.php', 'icon' => 'roles', 'label' => 'Roles &amp; Permissions', 'show' => hasPermission('roles.manage')],
+            ['key' => 'users', 'href' => '/users/index.php', 'icon' => 'users', 'label' => 'User Accounts', 'show' => hasPermission('users.manage')],
+            ['key' => 'settings', 'href' => '/settings/index.php', 'icon' => 'settings', 'label' => 'Password Settings', 'show' => hasPermission('settings.manage')],
+        ]],
+    ];
+}
+
+function initials(string $name): string
+{
+    $parts = preg_split('/\s+/', trim($name));
+    $letters = array_map(static fn ($p) => mb_strtoupper(mb_substr($p, 0, 1)), array_filter($parts));
+    return implode('', array_slice($letters, 0, 2)) ?: '?';
+}
+
 function navIcon(string $name): string
 {
     $icons = [
@@ -34,7 +64,7 @@ function navIcon(string $name): string
         'logout'    => '<path d="M14 4H5v16h9M10 12h11M18 8l4 4-4 4"/>',
         'lock'      => '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3M12 15v3"/>',
     ];
-    return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' . ($icons[$name] ?? '') . '</svg>';
+    return '<svg class="icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' . ($icons[$name] ?? '') . '</svg>';
 }
 ?>
 <!DOCTYPE html>
@@ -44,7 +74,7 @@ function navIcon(string $name): string
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= e(pageTitle($pageTitle)) ?></title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='5' y='11' width='14' height='10' rx='2' fill='%232563eb'/%3E%3Cpath d='M8 11V8a4 4 0 0 1 8 0v3' fill='none' stroke='%232563eb' stroke-width='2'/%3E%3C/svg%3E">
-    <link rel="stylesheet" href="<?= BASE_URL ?>/assets/css/style.css">
+    <link rel="stylesheet" href="<?= e(assetUrl('/assets/css/style.css')) ?>">
 </head>
 <body data-autolock="<?= (int) setting('auto_lock_minutes', '0') ?>" data-confirm-reveal="<?= (int) setting('require_confirm_reveal', '0') ?>" data-lock-url="<?= e(BASE_URL . '/lock.php') ?>">
 <div class="layout">
@@ -56,58 +86,27 @@ function navIcon(string $name): string
         </a>
 
         <nav class="sidebar__nav" aria-label="Main navigation">
-            <div class="sidebar__section-label">General</div>
             <a class="sidebar__link<?= isActive('dashboard', $activePage) ?>" href="<?= BASE_URL ?>/dashboard.php">
                 <?= navIcon('dashboard') ?>
                 <span class="sidebar__link-text">Dashboard</span>
             </a>
 
-            <div class="sidebar__section-label">Vault</div>
-            <?php if (hasPermission('passwords.view')): ?>
-                <a class="sidebar__link<?= isActive('passwords', $activePage) ?>" href="<?= BASE_URL ?>/passwords/index.php">
-                    <?= navIcon('passwords') ?>
-                    <span class="sidebar__link-text">Credential Vault</span>
-                </a>
-            <?php endif; ?>
-
-            <a class="sidebar__link<?= isActive('personal', $activePage) ?>" href="<?= BASE_URL ?>/personal/index.php">
-                <?= navIcon('personal') ?>
-                <span class="sidebar__link-text">Personal Vault</span>
-            </a>
-
-            <a class="sidebar__link<?= isActive('tools', $activePage) ?>" href="<?= BASE_URL ?>/tools/index.php">
-                <?= navIcon('export') ?>
-                <span class="sidebar__link-text">Import / Export</span>
-            </a>
-
-            <?php if (hasPermission('projects.manage')): ?>
-                <a class="sidebar__link<?= isActive('projects', $activePage) ?>" href="<?= BASE_URL ?>/projects/index.php">
-                    <?= navIcon('projects') ?>
-                    <span class="sidebar__link-text">Projects</span>
-                </a>
-            <?php endif; ?>
-
-            <div class="sidebar__section-label">Administration</div>
-            <?php if (hasPermission('roles.manage')): ?>
-                <a class="sidebar__link<?= isActive('roles', $activePage) ?>" href="<?= BASE_URL ?>/roles/index.php">
-                    <?= navIcon('roles') ?>
-                    <span class="sidebar__link-text">Roles &amp; Permissions</span>
-                </a>
-            <?php endif; ?>
-
-            <?php if (hasPermission('users.manage')): ?>
-                <a class="sidebar__link<?= isActive('users', $activePage) ?>" href="<?= BASE_URL ?>/users/index.php">
-                    <?= navIcon('users') ?>
-                    <span class="sidebar__link-text">User Accounts</span>
-                </a>
-            <?php endif; ?>
-
-            <?php if (hasPermission('settings.manage')): ?>
-                <a class="sidebar__link<?= isActive('settings', $activePage) ?>" href="<?= BASE_URL ?>/settings/index.php">
-                    <?= navIcon('settings') ?>
-                    <span class="sidebar__link-text">Password Settings</span>
-                </a>
-            <?php endif; ?>
+            <?php foreach (sidebarGroups() as $group):
+                $items = array_filter($group['items'], static fn ($it) => $it['show']);
+                if (!$items) {
+                    continue;
+                }
+            ?>
+                <details class="sidebar__group" open>
+                    <summary class="sidebar__group-label"><?= e($group['label']) ?></summary>
+                    <?php foreach ($items as $item): ?>
+                        <a class="sidebar__link<?= isActive($item['key'], $activePage) ?>" href="<?= BASE_URL . $item['href'] ?>">
+                            <?= navIcon($item['icon']) ?>
+                            <span class="sidebar__link-text"><?= $item['label'] ?></span>
+                        </a>
+                    <?php endforeach; ?>
+                </details>
+            <?php endforeach; ?>
         </nav>
 
         <div class="sidebar__footer">
@@ -126,12 +125,25 @@ function navIcon(string $name): string
                 <span></span><span></span><span></span>
             </button>
             <h1 class="topbar__title"><?= e($pageTitle) ?></h1>
-            <div class="topbar__user">
-                <?php foreach ($userRoles as $role): ?>
-                    <span class="badge badge--role"><?= e($role['name']) ?></span>
-                <?php endforeach; ?>
-                <span class="topbar__user-name"><?= e($currentUser['full_name'] ?: $currentUser['username']) ?></span>
-                <a class="btn btn--small" href="<?= BASE_URL ?>/logout.php">Sign out</a>
+            <div class="topbar__user" id="user-menu">
+                <button type="button" class="topbar__user-btn" id="user-menu-toggle" aria-haspopup="true" aria-expanded="false">
+                    <span class="topbar__user-name"><?= e($currentUser['full_name'] ?: $currentUser['username']) ?></span>
+                    <span class="topbar__avatar"><?= e(initials($currentUser['full_name'] ?: $currentUser['username'])) ?></span>
+                </button>
+                <div class="topbar__dropdown" id="user-menu-dropdown">
+                    <div class="topbar__dropdown-header">
+                        <div class="topbar__dropdown-name"><?= e($currentUser['full_name'] ?: $currentUser['username']) ?></div>
+                        <div class="topbar__dropdown-email"><?= e($currentUser['email'] ?? '') ?></div>
+                        <div class="topbar__dropdown-roles">
+                            <?php foreach ($userRoles as $role): ?>
+                                <span class="badge badge--role"><?= e($role['name']) ?></span>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                    <a class="topbar__dropdown-item" href="<?= BASE_URL ?>/logout.php">
+                        <?= navIcon('logout') ?> Sign out
+                    </a>
+                </div>
             </div>
         </header>
 

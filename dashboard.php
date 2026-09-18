@@ -8,18 +8,33 @@ requireLogin();
 $pageTitle = 'Dashboard';
 $activePage = 'dashboard';
 
-$totalPasswords = (int) $db->query('SELECT COUNT(*) FROM passwords')->fetchColumn();
 $totalProjects  = (int) $db->query('SELECT COUNT(*) FROM projects')->fetchColumn();
 $totalUsers     = (int) $db->query('SELECT COUNT(*) FROM users')->fetchColumn();
 $totalRoles     = (int) $db->query('SELECT COUNT(*) FROM roles')->fetchColumn();
 
-$recent = $db->query(
-    'SELECT p.id, p.title, p.username, p.url, p.updated_at, pr.name AS project_name
-       FROM passwords p
-       LEFT JOIN projects pr ON pr.id = p.project_id
-      ORDER BY p.updated_at DESC
-      LIMIT 5'
-)->fetchAll();
+$canViewVault = hasPermission('passwords.view');
+$totalPasswords = $canViewVault ? (int) $db->query('SELECT COUNT(*) FROM passwords')->fetchColumn() : 0;
+
+$recent = [];
+if ($canViewVault) {
+    // Over-fetch then filter by per-credential access, since a restricted
+    // credential's title/username must not leak into this widget either.
+    $candidates = $db->query(
+        'SELECT p.id, p.title, p.username, p.url, p.updated_at, pr.name AS project_name
+           FROM passwords p
+           LEFT JOIN projects pr ON pr.id = p.project_id
+          ORDER BY p.updated_at DESC
+          LIMIT 20'
+    )->fetchAll();
+    foreach ($candidates as $row) {
+        if (canAccessCredential((int) $row['id'])) {
+            $recent[] = $row;
+            if (count($recent) >= 5) {
+                break;
+            }
+        }
+    }
+}
 
 require __DIR__ . '/includes/header.php';
 ?>
@@ -27,7 +42,7 @@ require __DIR__ . '/includes/header.php';
 <div class="grid grid--stats">
     <div class="card stat-card">
         <div class="stat-card__value"><?= $totalPasswords ?></div>
-        <div class="stat-card__label">Passwords</div>
+        <div class="stat-card__label">Credentials</div>
     </div>
     <div class="card stat-card">
         <div class="stat-card__value"><?= $totalProjects ?></div>
@@ -46,12 +61,14 @@ require __DIR__ . '/includes/header.php';
 <div class="grid grid--two">
     <div class="card">
         <div class="card__header">
-            <h2 class="card__title">Recent passwords</h2>
-            <?php if (hasPermission('passwords.view')): ?>
+            <h2 class="card__title">Recent credentials</h2>
+            <?php if ($canViewVault): ?>
                 <a class="btn btn--small" href="passwords/index.php">View all</a>
             <?php endif; ?>
         </div>
-        <?php if ($recent): ?>
+        <?php if (!$canViewVault): ?>
+            <p class="muted">You don't have permission to view the Credential Vault.</p>
+        <?php elseif ($recent): ?>
             <div class="table-wrap">
             <table class="table">
                 <thead>
@@ -75,7 +92,7 @@ require __DIR__ . '/includes/header.php';
             </table>
             </div>
         <?php else: ?>
-            <p class="muted">No passwords stored yet.</p>
+            <p class="muted">No credentials stored yet.</p>
         <?php endif; ?>
     </div>
 
@@ -85,8 +102,9 @@ require __DIR__ . '/includes/header.php';
         </div>
         <div class="quick-actions">
             <?php if (hasPermission('passwords.manage')): ?>
-                <a class="btn btn--primary" href="passwords/create.php">+ New password</a>
+                <a class="btn btn--primary" href="passwords/create.php">+ New Credential</a>
             <?php endif; ?>
+            <a class="btn" href="personal/index.php">Personal Vault</a>
             <?php if (hasPermission('roles.manage')): ?>
                 <a class="btn" href="roles/index.php">Manage roles</a>
             <?php endif; ?>

@@ -53,7 +53,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= e(pageTitle('Sign in')) ?></title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='5' y='11' width='14' height='10' rx='2' fill='%232563eb'/%3E%3Cpath d='M8 11V8a4 4 0 0 1 8 0v3' fill='none' stroke='%232563eb' stroke-width='2'/%3E%3C/svg%3E">
-    <link rel="stylesheet" href="<?= BASE_URL ?>/assets/css/style.css">
+    <link rel="stylesheet" href="<?= e(assetUrl('/assets/css/style.css')) ?>">
 </head>
 <body class="auth-body">
     <div class="auth-card">
@@ -79,8 +79,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
             <button type="submit" class="btn btn--primary btn--block">Sign in</button>
         </form>
-
-        <p class="auth-card__hint">Default accounts: <strong>admin/admin123</strong> &middot; <strong>manager/manager123</strong> &middot; <strong>viewer/viewer123</strong></p>
     </div>
 </body>
 </html>

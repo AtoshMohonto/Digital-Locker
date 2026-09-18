@@ -1,0 +1,20 @@
+# Digital Locker - baseline security headers and hardening.
+
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set Referrer-Policy "same-origin"
+</IfModule>
+
+# Trust forwarded headers from reverse proxies (ngrok, Cloudflare, etc.)
+<IfModule mod_remoteip.c>
+    RemoteIPHeader X-Forwarded-For
+    RemoteIPTrustedProxy 127.0.0.1 ::1
+</IfModule>
+
+# Block direct access to non-web files that shouldn't be requested directly.
+<FilesMatch "\.(sql|md|log)$">
+    Require all denied
+</FilesMatch>
+
+Options -Indexes

@@ -41,7 +41,7 @@ require __DIR__ . '/../includes/header.php';
             <tbody>
             <?php foreach ($projects as $p): ?>
                 <tr>
-                    <td><strong><?= e($p['name']) ?></strong></td>
+                    <td><strong><a href="view.php?id=<?= (int) $p['id'] ?>"><?= e($p['name']) ?></a></strong></td>
                     <td><?= e($p['description'] ?: '—') ?></td>
                     <td><?= (int) $p['password_count'] ?></td>
                     <td class="table__actions">

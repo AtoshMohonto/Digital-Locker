@@ -27,6 +27,7 @@ $activePage = 'passwords';
 
 $roles      = $db->query('SELECT id, name FROM roles ORDER BY name')->fetchAll();
 $users      = $db->query('SELECT id, username, full_name FROM users WHERE is_active = 1 ORDER BY username')->fetchAll();
+$projects   = $db->query('SELECT id, name FROM projects ORDER BY name')->fetchAll();
 $categories = categoryOptions();
 
 $roleStmt = $db->prepare('SELECT role_id FROM password_roles WHERE password_id = :id');
@@ -43,6 +44,7 @@ $old = [
     'notes'       => (string) $item['notes'],
     'extra_info'  => '',
     'assigned_to' => (int) $item['assigned_to'],
+    'project_id'  => (int) $item['project_id'],
 ];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -58,6 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'notes'       => trim($_POST['notes'] ?? ''),
             'extra_info'  => trim($_POST['extra_info'] ?? ''),
             'assigned_to' => (int) ($_POST['assigned_to'] ?? 0),
+            'project_id'  => (int) ($_POST['project_id'] ?? 0),
         ];
         $validRoleIds = array_column($roles, 'id');
         $selectedRoles = array_intersect(array_map('intval', $_POST['roles'] ?? []), $validRoleIds);
@@ -85,7 +88,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'UPDATE passwords
                     SET title = :title, category = :category, username = :username,
                         encrypted = :encrypted, url = :url, notes = :notes, extra_info = :extra_info,
-                        assigned_to = :assigned_to
+                        assigned_to = :assigned_to, project_id = :project_id
                   WHERE id = :id'
             );
             $stmt->execute([
@@ -97,6 +100,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'notes'       => $old['notes'] !== '' ? $old['notes'] : null,
                 'extra_info'  => $extraInfo,
                 'assigned_to' => $old['assigned_to'] > 0 ? $old['assigned_to'] : null,
+                'project_id'  => $old['project_id'] > 0 ? $old['project_id'] : null,
                 'id'          => $id,
             ]);
 
@@ -147,15 +151,25 @@ require __DIR__ . '/../includes/header.php';
                 </select>
             </div>
             <div class="form-group">
-                <label>Access Level <span class="muted">(who can see this)</span></label>
-                <?php foreach ($roles as $r): ?>
-                    <label class="checkbox">
-                        <input type="checkbox" name="roles[]" value="<?= (int) $r['id'] ?>"
-                               <?= in_array((int) $r['id'], $selectedRoles, true) ? 'checked' : '' ?>>
-                        <span><?= e(accessLabel($r['name'])) ?></span>
-                    </label>
-                <?php endforeach; ?>
+                <label for="project_id">Project</label>
+                <select id="project_id" name="project_id">
+                    <option value="0">— None —</option>
+                    <?php foreach ($projects as $p): ?>
+                        <option value="<?= (int) $p['id'] ?>" <?= $old['project_id'] === (int) $p['id'] ? 'selected' : '' ?>><?= e($p['name']) ?></option>
+                    <?php endforeach; ?>
+                </select>
             </div>
+        </div>
+
+        <div class="form-group">
+            <label>Access Level <span class="muted">(who can see this)</span></label>
+            <?php foreach ($roles as $r): ?>
+                <label class="checkbox">
+                    <input type="checkbox" name="roles[]" value="<?= (int) $r['id'] ?>"
+                           <?= in_array((int) $r['id'], $selectedRoles, true) ? 'checked' : '' ?>>
+                    <span><?= e(accessLabel($r['name'])) ?></span>
+                </label>
+            <?php endforeach; ?>
         </div>
 
         <div class="form-group">

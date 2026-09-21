@@ -4,6 +4,17 @@
  */
 declare(strict_types=1);
 
+/**
+ * Never let a raw PHP warning/notice render into the page -- a credential
+ * vault leaking stack traces or file paths to the browser is a real
+ * information-disclosure risk, not just cosmetic. Errors still go to the
+ * server's error log (where every fix in this app has been diagnosed from);
+ * they're just never echoed into the response body.
+ */
+error_reporting(E_ALL);
+ini_set('display_errors', '0');
+ini_set('log_errors', '1');
+
 $config = require __DIR__ . '/../config/config.php';
 date_default_timezone_set($config['app']['timezone']);
 

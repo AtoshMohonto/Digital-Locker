@@ -8,39 +8,48 @@ requirePermission('passwords.manage');
 $pageTitle = 'New Credential';
 $activePage = 'passwords';
 
-$roles      = $db->query('SELECT id, name FROM roles ORDER BY name')->fetchAll();
-$users      = $db->query('SELECT id, username, full_name FROM users WHERE is_active = 1 ORDER BY username')->fetchAll();
-$projects   = $db->query('SELECT id, name FROM projects ORDER BY name')->fetchAll();
-$categories = categoryOptions();
+$roles       = $db->query('SELECT id, name FROM roles ORDER BY name')->fetchAll();
+$users       = $db->query('SELECT id, username, full_name FROM users WHERE is_active = 1 ORDER BY username')->fetchAll();
+$projects    = $db->query('SELECT id, name FROM projects ORDER BY name')->fetchAll();
+$categories  = categoryOptions();
+$loginRoles  = existingLoginRoles();
 
 $errors = [];
 $old = [
     'title'       => '',
+    'login_role'  => '',
     'category'    => '',
     'username'    => '',
+    'email'       => '',
     'password'    => '',
     'url'         => '',
     'notes'       => '',
     'extra_info'  => '',
     'assigned_to' => 0,
-    'project_id'  => 0,
+    // Arriving from a project's own "+ New Credential" button pre-selects
+    // that project, so you're not hunting for it again in the dropdown.
+    'project_id'  => (int) ($_GET['project_id'] ?? 0),
 ];
 $selectedRoles = [];
+$newProjectName = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf($_POST['csrf_token'] ?? null)) {
         $errors[] = 'Security token mismatch. Please try again.';
     } else {
+        $newProjectName = trim($_POST['new_project_name'] ?? '');
         $old = [
             'title'       => trim($_POST['title'] ?? ''),
+            'login_role'  => trim($_POST['login_role'] ?? ''),
             'category'    => trim($_POST['category'] ?? ''),
             'username'    => trim($_POST['username'] ?? ''),
+            'email'       => trim($_POST['email'] ?? ''),
             'password'    => (string) ($_POST['password'] ?? ''),
             'url'         => trim($_POST['url'] ?? ''),
             'notes'       => trim($_POST['notes'] ?? ''),
             'extra_info'  => trim($_POST['extra_info'] ?? ''),
             'assigned_to' => (int) ($_POST['assigned_to'] ?? 0),
-            'project_id'  => (int) ($_POST['project_id'] ?? 0),
+            'project_id'  => ($_POST['project_id'] ?? '') === '__new__' ? -1 : (int) ($_POST['project_id'] ?? 0),
         ];
         $validRoleIds = array_column($roles, 'id');
         $selectedRoles = array_intersect(array_map('intval', $_POST['roles'] ?? []), $validRoleIds);
@@ -51,6 +60,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($old['password'] === '') {
             $errors[] = 'A password value is required.';
         }
+        if ($old['project_id'] === -1 && $newProjectName === '') {
+            $errors[] = 'Enter a name for the new project.';
+        }
         $policyErrors = validatePasswordPolicy($old['password'], effectivePolicy());
         if ($policyErrors) {
             $errors = array_merge($errors, $policyErrors);
@@ -59,14 +71,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$errors) {
             $db->beginTransaction();
 
+            // "+ Create new project" was chosen instead of an existing one --
+            // create it first so the credential can link straight to it.
+            if ($old['project_id'] === -1) {
+                try {
+                    $db->prepare('INSERT INTO projects (name) VALUES (:name)')->execute(['name' => $newProjectName]);
+                    $old['project_id'] = (int) $db->lastInsertId();
+                    if (!isAdministrator()) {
+                        $db->prepare('INSERT IGNORE INTO project_members (project_id, user_id, project_role) VALUES (:pid, :uid, :role)')
+                            ->execute(['pid' => $old['project_id'], 'uid' => (int) currentUser()['id'], 'role' => 'manager']);
+                    }
+                } catch (PDOException $e) {
+                    $db->rollBack();
+                    $errors[] = 'A project named "' . $newProjectName . '" already exists. Pick it from the dropdown instead.';
+                }
+            }
+        }
+
+        if (!$errors) {
+            // The Role field is a convenience over the "Role — System Name"
+            // convention the Role column/accordion grouping already parse --
+            // it just saves you typing the em dash yourself.
+            $finalTitle = $old['login_role'] !== '' ? $old['login_role'] . ' — ' . $old['title'] : $old['title'];
+
             $stmt = $db->prepare(
-                'INSERT INTO passwords (title, category, username, encrypted, url, notes, extra_info, assigned_to, project_id, created_by)
-                 VALUES (:title, :category, :username, :encrypted, :url, :notes, :extra_info, :assigned_to, :project_id, :created_by)'
+                'INSERT INTO passwords (title, category, username, email, encrypted, url, notes, extra_info, assigned_to, project_id, created_by)
+                 VALUES (:title, :category, :username, :email, :encrypted, :url, :notes, :extra_info, :assigned_to, :project_id, :created_by)'
             );
             $stmt->execute([
-                'title'       => $old['title'],
+                'title'      => $finalTitle,
                 'category'   => $old['category'],
                 'username'   => $old['username'],
+                'email'      => $old['email'],
                 'encrypted'  => encrypt_password($old['password'], $appConfig),
                 'url'        => $old['url'],
                 'notes'      => $old['notes'] !== '' ? $old['notes'] : null,
@@ -84,7 +120,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $db->commit();
 
-            logAudit('create', $passwordId, $old['title']);
+            logAudit('create', $passwordId, $finalTitle);
             flash('success', 'Credential created.');
             redirect(BASE_URL . '/passwords/index.php');
         }
@@ -129,7 +165,10 @@ require __DIR__ . '/../includes/header.php';
                     <?php foreach ($projects as $p): ?>
                         <option value="<?= (int) $p['id'] ?>" <?= $old['project_id'] === (int) $p['id'] ? 'selected' : '' ?>><?= e($p['name']) ?></option>
                     <?php endforeach; ?>
+                    <option value="__new__" <?= $old['project_id'] === -1 ? 'selected' : '' ?>>+ Create new project…</option>
                 </select>
+                <input type="text" id="new_project_name" name="new_project_name" value="<?= e($newProjectName) ?>"
+                       placeholder="New project name" style="margin-top:8px" <?= $old['project_id'] === -1 ? '' : 'hidden' ?>>
             </div>
         </div>
 
@@ -150,8 +189,24 @@ require __DIR__ . '/../includes/header.php';
         </div>
 
         <div class="form-group">
-            <label for="username">Username / Email</label>
-            <input type="text" id="username" name="username" value="<?= e($old['username']) ?>">
+            <label for="login_role">Role <span class="muted">(optional -- e.g. Admin, Manager, Teacher; groups this credential in the Role column and role accordion)</span></label>
+            <input type="text" id="login_role" name="login_role" value="<?= e($old['login_role']) ?>" list="login-role-suggestions" placeholder="e.g. Admin">
+            <datalist id="login-role-suggestions">
+                <?php foreach ($loginRoles as $lr): ?>
+                    <option value="<?= e($lr) ?>">
+                <?php endforeach; ?>
+            </datalist>
+        </div>
+
+        <div class="grid grid--two">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" value="<?= e($old['username']) ?>">
+            </div>
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email" value="<?= e($old['email']) ?>">
+            </div>
         </div>
 
         <div class="form-group">
@@ -188,5 +243,17 @@ require __DIR__ . '/../includes/header.php';
         </div>
     </form>
 </div>
+
+<script>
+    (function () {
+        var select = document.getElementById('project_id');
+        var newName = document.getElementById('new_project_name');
+        if (!select || !newName) { return; }
+        select.addEventListener('change', function () {
+            newName.hidden = select.value !== '__new__';
+            if (!newName.hidden) { newName.focus(); }
+        });
+    })();
+</script>
 
 <?php require __DIR__ . '/../includes/footer.php'; ?>

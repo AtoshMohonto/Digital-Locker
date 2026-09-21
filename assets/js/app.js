@@ -109,6 +109,20 @@
     }
 
     /* ------------------------------------------------------------------
+     * Expand all / collapse all -- generic over every .vault-group <details>
+     * on the page, so the same two buttons work for the Credential Vault's
+     * grouped views and the Projects page's role accordion alike.
+     * ------------------------------------------------------------------ */
+    document.addEventListener('click', function (e) {
+        if (e.target && e.target.id === 'expand-all-btn') {
+            document.querySelectorAll('.vault-group').forEach(function (d) { d.open = true; });
+        }
+        if (e.target && e.target.id === 'collapse-all-btn') {
+            document.querySelectorAll('.vault-group').forEach(function (d) { d.open = false; });
+        }
+    });
+
+    /* ------------------------------------------------------------------
      * Password generator
      * ------------------------------------------------------------------ */
     document.addEventListener('click', function (e) {
@@ -155,7 +169,7 @@
      * ------------------------------------------------------------------ */
     var MASK = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
 
-    function toggleReveal(btn, targetEl, url, field) {
+    function toggleReveal(btn, targetEl, url, field, skipConfirm) {
         // Remember the button's original (masked-state) glyph/label the first time it's used.
         if (!btn.dataset.maskedLabel) {
             btn.dataset.maskedLabel = btn.textContent;
@@ -170,7 +184,7 @@
             return;
         }
 
-        var askConfirm = body.dataset.confirmReveal === '1';
+        var askConfirm = !skipConfirm && body.dataset.confirmReveal === '1';
         if (askConfirm && !window.confirm('Reveal this secret?')) {
             return;
         }
@@ -215,6 +229,73 @@
         var targetEl = document.getElementById(btn.dataset.target);
         if (!targetEl) { return; }
         toggleReveal(btn, targetEl, btn.dataset.url, 'secret');
+    });
+
+    // Reveal All / Hide All: drives every .reveal-row-btn on the page at once.
+    // Asks for confirmation (if the setting is on) exactly once up front,
+    // rather than once per row.
+    document.addEventListener('click', function (e) {
+        if (e.target && e.target.id === 'reveal-all-btn') {
+            var toReveal = Array.prototype.filter.call(document.querySelectorAll('.reveal-row-btn'), function (btn) {
+                var targetEl = document.getElementById(btn.dataset.target);
+                return targetEl && targetEl.dataset.revealed !== '1';
+            });
+            if (!toReveal.length) { return; }
+            if (body.dataset.confirmReveal === '1' && !window.confirm('Reveal all ' + toReveal.length + ' password(s) on this page?')) {
+                return;
+            }
+            toReveal.forEach(function (btn) {
+                var targetEl = document.getElementById(btn.dataset.target);
+                toggleReveal(btn, targetEl, btn.dataset.url, 'secret', true);
+            });
+        }
+        if (e.target && e.target.id === 'hide-all-btn') {
+            document.querySelectorAll('.reveal-row-btn').forEach(function (btn) {
+                var targetEl = document.getElementById(btn.dataset.target);
+                if (targetEl && targetEl.dataset.revealed === '1') {
+                    toggleReveal(btn, targetEl, btn.dataset.url, 'secret', true);
+                }
+            });
+        }
+    });
+
+    // Plain-text copy (username/email): no secrecy, just copy the value straight off the button.
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest ? e.target.closest('.copy-text-btn') : null;
+        if (!btn) { return; }
+        copyText(btn.dataset.copy || '', btn);
+    });
+
+    // Per-row password copy in table/grid lists: each button carries its own
+    // reveal URL + target span, same convention as .reveal-row-btn.
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest ? e.target.closest('.copy-row-btn') : null;
+        if (!btn) { return; }
+        var targetEl = document.getElementById(btn.dataset.target);
+        if (!targetEl) { return; }
+
+        if (targetEl.dataset.revealed === '1') {
+            copyText(targetEl.textContent, btn);
+            return;
+        }
+
+        var askConfirm = body.dataset.confirmReveal === '1';
+        if (askConfirm && !window.confirm('Copy this secret to the clipboard?')) {
+            return;
+        }
+
+        fetch(btn.dataset.url, { credentials: 'same-origin' })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data.secret) {
+                    copyText(data.secret, btn);
+                } else {
+                    window.alert(data.error || 'Unable to copy secret.');
+                }
+            })
+            .catch(function () {
+                window.alert('Request failed.');
+            });
     });
 
     /* ------------------------------------------------------------------

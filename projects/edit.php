@@ -16,11 +16,20 @@ if (!$item) {
     redirect(BASE_URL . '/projects/index.php');
 }
 
+// A Manager may only edit projects they're a member of; an Administrator can
+// edit any of them.
+if (!isAdministrator() && !canAccessProject($id)) {
+    require __DIR__ . '/../403.php';
+    exit;
+}
+
 $pageTitle = 'Edit project';
 $activePage = 'projects';
 
+$categories = projectCategoryOptions();
+$types = projectTypeOptions();
 $errors = [];
-$old = ['name' => $item['name'], 'description' => (string) $item['description']];
+$old = ['name' => $item['name'], 'category' => (string) $item['category'], 'type' => (string) $item['type'], 'description' => (string) $item['description']];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf($_POST['csrf_token'] ?? null)) {
@@ -28,6 +37,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $old = [
             'name'        => trim($_POST['name'] ?? ''),
+            'category'    => trim($_POST['category'] ?? ''),
+            'type'        => trim($_POST['type'] ?? ''),
             'description' => trim($_POST['description'] ?? ''),
         ];
 
@@ -37,8 +48,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (!$errors) {
             try {
-                $stmt = $db->prepare('UPDATE projects SET name = :name, description = :description WHERE id = :id');
-                $stmt->execute(['name' => $old['name'], 'description' => $old['description'], 'id' => $id]);
+                $stmt = $db->prepare('UPDATE projects SET name = :name, category = :category, type = :type, description = :description WHERE id = :id');
+                $stmt->execute(['name' => $old['name'], 'category' => $old['category'], 'type' => $old['type'], 'description' => $old['description'], 'id' => $id]);
                 flash('success', 'Project updated.');
                 redirect(BASE_URL . '/projects/index.php');
             } catch (PDOException $e) {
@@ -67,6 +78,26 @@ require __DIR__ . '/../includes/header.php';
         <div class="form-group">
             <label for="name">Name *</label>
             <input type="text" id="name" name="name" value="<?= e($old['name']) ?>" required>
+        </div>
+
+        <div class="form-group">
+            <label for="category">Category</label>
+            <select id="category" name="category">
+                <option value="">— None —</option>
+                <?php foreach ($categories as $cat): ?>
+                    <option value="<?= e($cat) ?>" <?= $old['category'] === $cat ? 'selected' : '' ?>><?= e(projectCategoryIcon($cat)) ?> <?= e($cat) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="type">Type</label>
+            <select id="type" name="type">
+                <option value="">— None —</option>
+                <?php foreach ($types as $t): ?>
+                    <option value="<?= e($t) ?>" <?= $old['type'] === $t ? 'selected' : '' ?>><?= e(projectTypeIcon($t)) ?> <?= e($t) ?></option>
+                <?php endforeach; ?>
+            </select>
         </div>
 
         <div class="form-group">

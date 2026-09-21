@@ -11,6 +11,12 @@ USE digital_locker;
 -- ---------------------------------------------------------------------------
 -- Roles
 -- ---------------------------------------------------------------------------
+DROP TABLE IF EXISTS project_categories;
+DROP TABLE IF EXISTS project_types;
+DROP TABLE IF EXISTS personal_notes;
+DROP TABLE IF EXISTS project_comments;
+DROP TABLE IF EXISTS project_tasks;
+DROP TABLE IF EXISTS project_members;
 DROP TABLE IF EXISTS role_permissions;
 DROP TABLE IF EXISTS user_roles;
 DROP TABLE IF EXISTS passwords;
@@ -68,6 +74,8 @@ CREATE TABLE user_roles (
 CREATE TABLE projects (
   id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   name        VARCHAR(100) NOT NULL UNIQUE,
+  category    VARCHAR(60)  NOT NULL DEFAULT '',
+  type        VARCHAR(60)  NOT NULL DEFAULT '',
   description VARCHAR(255) NOT NULL DEFAULT '',
   created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
@@ -149,6 +157,89 @@ CREATE TABLE settings (
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------------------------
+-- Project workflow: team membership, tasks, and a discussion/review feed.
+-- Manager assigns Testers to a project and gives them tasks; Testers post
+-- reviews/notes in the project's discussion. Administrator oversees all of it.
+-- ---------------------------------------------------------------------------
+CREATE TABLE project_members (
+  id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  project_id   INT UNSIGNED NOT NULL,
+  user_id      INT UNSIGNED NOT NULL,
+  project_role ENUM('manager','tester') NOT NULL DEFAULT 'tester',
+  added_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_project_user (project_id, user_id),
+  CONSTRAINT fk_pm_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  CONSTRAINT fk_pm_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE project_tasks (
+  id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  project_id   INT UNSIGNED NOT NULL,
+  title        VARCHAR(150) NOT NULL,
+  description  TEXT,
+  assigned_to  INT UNSIGNED NULL,
+  status       ENUM('open','in_progress','done') NOT NULL DEFAULT 'open',
+  due_date     DATE NULL,
+  created_by   INT UNSIGNED NULL,
+  created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_pt_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  CONSTRAINT fk_pt_assigned FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_pt_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE project_comments (
+  id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  project_id  INT UNSIGNED NOT NULL,
+  user_id     INT UNSIGNED NULL,
+  author_name VARCHAR(120) NOT NULL DEFAULT '',
+  body        TEXT NOT NULL,
+  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_pc_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  CONSTRAINT fk_pc_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- ---------------------------------------------------------------------------
+-- Personal to-do list & notes: strictly private per user (same isolation
+-- model as Personal Vault), optionally tagged to a project.
+-- ---------------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- Project categories: admin-editable (create/delete), used to populate the
+-- category dropdown/filter on Projects instead of a fixed list.
+-- ---------------------------------------------------------------------------
+CREATE TABLE project_categories (
+  id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name       VARCHAR(60) NOT NULL UNIQUE,
+  -- Either a typed emoji, or an uploaded image's relative path
+  -- (e.g. "assets/uploads/categories/<name>.jpg").
+  icon       VARCHAR(255) NOT NULL DEFAULT '📁',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- A second, independent classification for projects (e.g. Web App, Mobile
+-- App, API/Service), alongside category -- same catalogue-table pattern.
+CREATE TABLE project_types (
+  id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name       VARCHAR(60) NOT NULL UNIQUE,
+  icon       VARCHAR(255) NOT NULL DEFAULT '🏷️',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE TABLE personal_notes (
+  id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id     INT UNSIGNED NOT NULL,
+  project_id  INT UNSIGNED NULL,
+  type        ENUM('todo','note') NOT NULL DEFAULT 'note',
+  title       VARCHAR(200) NOT NULL,
+  body        TEXT NULL,
+  is_done     TINYINT(1) NOT NULL DEFAULT 0,
+  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_pn_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_pn_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- ---------------------------------------------------------------------------
 -- Seed: permissions catalogue used by the UI
 -- ---------------------------------------------------------------------------
 -- passwords.view     - see password entries / reveal secrets
@@ -157,6 +248,8 @@ CREATE TABLE settings (
 -- roles.manage       - create/edit/delete roles and permissions
 -- users.manage       - create/edit/disable users and assign roles
 -- settings.manage    - change application settings
+-- tasks.manage       - assign project team members and create/edit tasks
+-- tasks.view         - see and act on tasks assigned to you
 
 -- ---------------------------------------------------------------------------
 -- Seed data
@@ -164,31 +257,41 @@ CREATE TABLE settings (
 INSERT INTO roles (id, name, description) VALUES
   (1, 'Administrator', 'Full access to everything in the vault.'),
   (2, 'Manager',      'Can manage passwords and projects, view users.'),
-  (3, 'Viewer',       'Read-only access to passwords.');
+  (3, 'Tester',       'Assigned to specific projects to test and review; read-only on the vault.');
 
 INSERT INTO role_permissions (role_id, permission) VALUES
   (1, 'passwords.view'),   (1, 'passwords.manage'),
   (1, 'projects.manage'),  (1, 'roles.manage'),
   (1, 'users.manage'),     (1, 'settings.manage'),
+  (1, 'tasks.manage'),     (1, 'tasks.view'),
   (2, 'passwords.view'),   (2, 'passwords.manage'),
   (2, 'projects.manage'),
-  (3, 'passwords.view');
+  (2, 'tasks.manage'),     (2, 'tasks.view'),
+  (3, 'passwords.view'),   (3, 'tasks.view');
 
--- admin / admin123 ; manager / manager123 ; viewer / viewer123
+-- admin / admin123 ; manager / manager123 ; tester / viewer123
 INSERT INTO users (id, username, email, full_name, password_hash, is_active) VALUES
   (1, 'admin',   'admin@example.com',    'System Administrator', '$2y$10$t2dDBml7f6/ui6w1tnMZ5.rk69acHx8i0ETZEoTSS7Fvu26JqT0q.', 1),
   (2, 'manager', 'manager@example.com',  'Vault Manager',        '$2y$10$nqxwa6XUZPTQZIb3xAATF.0r/t2fMqk1ux.IU10dpDakTd0yklCF6', 1),
-  (3, 'viewer',  'viewer@example.com',   'Read Only User',       '$2y$10$ACGD3eAGzafGtjMwZeC8oOo2hwl4bleFOBj.NHTffcxY7F7E4QIk.', 1);
+  (3, 'tester',  'tester@example.com',   'QA Tester',            '$2y$10$ACGD3eAGzafGtjMwZeC8oOo2hwl4bleFOBj.NHTffcxY7F7E4QIk.', 1);
 
 INSERT INTO user_roles (user_id, role_id) VALUES
   (1, 1),
   (2, 2),
   (3, 3);
 
-INSERT INTO projects (id, name, description) VALUES
-  (1, 'General',        'Shared and default passwords'),
-  (2, 'Web Applications','Credentials for internal web apps'),
-  (3, 'Infrastructure', 'Servers, databases and network gear');
+INSERT INTO project_categories (name, icon) VALUES
+  ('Work', '💼'), ('Freelancing', '🧑‍💻'), ('Client', '🤝'), ('Demo', '🧪'),
+  ('Personal', '🏠'), ('Learning', '📚'), ('Other', '📁');
+
+INSERT INTO project_types (name, icon) VALUES
+  ('Web App', '🌐'), ('Mobile App', '📱'), ('Desktop App', '🖥️'),
+  ('API/Service', '🔌'), ('Other', '🏷️');
+
+INSERT INTO projects (id, name, category, description) VALUES
+  (1, 'General',        'Work', 'Shared and default passwords'),
+  (2, 'Web Applications','Work', 'Credentials for internal web apps'),
+  (3, 'Infrastructure', 'Work', 'Servers, databases and network gear');
 
 -- NOTE: `encrypted` below is real AES-256-GCM ciphertext (base64 of iv+tag+ciphertext),
 -- produced by includes/functions.php::encrypt_password() using the master_key that ships

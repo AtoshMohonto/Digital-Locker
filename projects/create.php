@@ -8,8 +8,10 @@ requirePermission('projects.manage');
 $pageTitle = 'New project';
 $activePage = 'projects';
 
+$categories = projectCategoryOptions();
+$types = projectTypeOptions();
 $errors = [];
-$old = ['name' => '', 'description' => ''];
+$old = ['name' => '', 'category' => '', 'type' => '', 'description' => ''];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf($_POST['csrf_token'] ?? null)) {
@@ -17,6 +19,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $old = [
             'name'        => trim($_POST['name'] ?? ''),
+            'category'    => trim($_POST['category'] ?? ''),
+            'type'        => trim($_POST['type'] ?? ''),
             'description' => trim($_POST['description'] ?? ''),
         ];
 
@@ -26,8 +30,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (!$errors) {
             try {
-                $stmt = $db->prepare('INSERT INTO projects (name, description) VALUES (:name, :description)');
-                $stmt->execute(['name' => $old['name'], 'description' => $old['description']]);
+                $stmt = $db->prepare('INSERT INTO projects (name, category, type, description) VALUES (:name, :category, :type, :description)');
+                $stmt->execute(['name' => $old['name'], 'category' => $old['category'], 'type' => $old['type'], 'description' => $old['description']]);
+                // Must be read before any other query runs -- lastInsertId() only
+                // reflects the most recently executed statement, so even an
+                // unrelated SELECT in between (e.g. inside isAdministrator()) would
+                // reset it to 0.
+                $newId = (int) $db->lastInsertId();
+
+                // A Manager (not an Administrator) is scoped to only the projects
+                // they're a member of, so join them to what they just created --
+                // otherwise they'd immediately lose access to their own project.
+                if (!isAdministrator()) {
+                    $db->prepare('INSERT IGNORE INTO project_members (project_id, user_id, project_role) VALUES (:pid, :uid, :role)')
+                        ->execute(['pid' => $newId, 'uid' => (int) currentUser()['id'], 'role' => 'manager']);
+                }
+
                 flash('success', 'Project created.');
                 redirect(BASE_URL . '/projects/index.php');
             } catch (PDOException $e) {
@@ -56,6 +74,26 @@ require __DIR__ . '/../includes/header.php';
         <div class="form-group">
             <label for="name">Name *</label>
             <input type="text" id="name" name="name" value="<?= e($old['name']) ?>" required>
+        </div>
+
+        <div class="form-group">
+            <label for="category">Category</label>
+            <select id="category" name="category">
+                <option value="">— None —</option>
+                <?php foreach ($categories as $cat): ?>
+                    <option value="<?= e($cat) ?>" <?= $old['category'] === $cat ? 'selected' : '' ?>><?= e(projectCategoryIcon($cat)) ?> <?= e($cat) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="type">Type</label>
+            <select id="type" name="type">
+                <option value="">— None —</option>
+                <?php foreach ($types as $t): ?>
+                    <option value="<?= e($t) ?>" <?= $old['type'] === $t ? 'selected' : '' ?>><?= e(projectTypeIcon($t)) ?> <?= e($t) ?></option>
+                <?php endforeach; ?>
+            </select>
         </div>
 
         <div class="form-group">

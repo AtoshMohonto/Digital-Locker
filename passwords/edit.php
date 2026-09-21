@@ -29,16 +29,21 @@ $roles      = $db->query('SELECT id, name FROM roles ORDER BY name')->fetchAll()
 $users      = $db->query('SELECT id, username, full_name FROM users WHERE is_active = 1 ORDER BY username')->fetchAll();
 $projects   = $db->query('SELECT id, name FROM projects ORDER BY name')->fetchAll();
 $categories = categoryOptions();
+$loginRoles = existingLoginRoles();
 
 $roleStmt = $db->prepare('SELECT role_id FROM password_roles WHERE password_id = :id');
 $roleStmt->execute(['id' => $id]);
 $selectedRoles = array_map('intval', array_column($roleStmt->fetchAll(), 'role_id'));
 
+$titleParts = splitLoginRoleTitle($item['title']);
+
 $errors = [];
 $old = [
-    'title'       => $item['title'],
+    'title'       => $titleParts['base'],
+    'login_role'  => $titleParts['role'],
     'category'    => (string) $item['category'],
     'username'    => $item['username'],
+    'email'       => (string) $item['email'],
     'password'    => '',
     'url'         => $item['url'],
     'notes'       => (string) $item['notes'],
@@ -53,8 +58,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $old = [
             'title'       => trim($_POST['title'] ?? ''),
+            'login_role'  => trim($_POST['login_role'] ?? ''),
             'category'    => trim($_POST['category'] ?? ''),
             'username'    => trim($_POST['username'] ?? ''),
+            'email'       => trim($_POST['email'] ?? ''),
             'password'    => (string) ($_POST['password'] ?? ''),
             'url'         => trim($_POST['url'] ?? ''),
             'notes'       => trim($_POST['notes'] ?? ''),
@@ -84,17 +91,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $db->beginTransaction();
 
+            $finalTitle = $old['login_role'] !== '' ? $old['login_role'] . ' — ' . $old['title'] : $old['title'];
+
             $stmt = $db->prepare(
                 'UPDATE passwords
-                    SET title = :title, category = :category, username = :username,
+                    SET title = :title, category = :category, username = :username, email = :email,
                         encrypted = :encrypted, url = :url, notes = :notes, extra_info = :extra_info,
                         assigned_to = :assigned_to, project_id = :project_id
                   WHERE id = :id'
             );
             $stmt->execute([
-                'title'       => $old['title'],
+                'title'       => $finalTitle,
                 'category'    => $old['category'],
                 'username'    => $old['username'],
+                'email'       => $old['email'],
                 'encrypted'   => $encrypted,
                 'url'         => $old['url'],
                 'notes'       => $old['notes'] !== '' ? $old['notes'] : null,
@@ -112,7 +122,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $db->commit();
 
-            logAudit('update', $id, $old['title']);
+            logAudit('update', $id, $finalTitle);
             flash('success', 'Credential updated.');
             redirect(BASE_URL . '/passwords/index.php');
         }
@@ -178,8 +188,24 @@ require __DIR__ . '/../includes/header.php';
         </div>
 
         <div class="form-group">
-            <label for="username">Username / Email</label>
-            <input type="text" id="username" name="username" value="<?= e($old['username']) ?>">
+            <label for="login_role">Role <span class="muted">(optional -- e.g. Admin, Manager, Teacher; groups this credential in the Role column and role accordion)</span></label>
+            <input type="text" id="login_role" name="login_role" value="<?= e($old['login_role']) ?>" list="login-role-suggestions" placeholder="e.g. Admin">
+            <datalist id="login-role-suggestions">
+                <?php foreach ($loginRoles as $lr): ?>
+                    <option value="<?= e($lr) ?>">
+                <?php endforeach; ?>
+            </datalist>
+        </div>
+
+        <div class="grid grid--two">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" value="<?= e($old['username']) ?>">
+            </div>
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email" value="<?= e($old['email']) ?>">
+            </div>
         </div>
 
         <div class="form-group">

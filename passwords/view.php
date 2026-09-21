@@ -58,8 +58,25 @@ require __DIR__ . '/../includes/header.php';
         <dt>Project</dt>
         <dd><?= e($item['project_name'] ?: '—') ?></dd>
 
-        <dt>Username / Email</dt>
-        <dd><?= e($item['username'] ?: '—') ?></dd>
+        <dt>Username</dt>
+        <dd>
+            <?php if ($item['username']): ?>
+                <span id="username-value"><?= e($item['username']) ?></span>
+                <button type="button" class="btn btn--small btn--ghost copy-text-btn" data-copy="<?= e($item['username']) ?>" title="Copy username">📋 Copy</button>
+            <?php else: ?>
+                —
+            <?php endif; ?>
+        </dd>
+
+        <dt>Email</dt>
+        <dd>
+            <?php if ($item['email']): ?>
+                <span id="email-value"><?= e($item['email']) ?></span>
+                <button type="button" class="btn btn--small btn--ghost copy-text-btn" data-copy="<?= e($item['email']) ?>" title="Copy email">📋 Copy</button>
+            <?php else: ?>
+                —
+            <?php endif; ?>
+        </dd>
 
         <dt>Password</dt>
         <dd>

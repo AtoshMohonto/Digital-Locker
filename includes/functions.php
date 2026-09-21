@@ -279,9 +279,266 @@ function accessLabel(?string $roleName): string
     $labels = [
         'Administrator' => 'Admin Only',
         'Manager'       => 'Management+',
+        'Tester'        => 'Testers',
         'Viewer'        => 'All Staff',
     ];
     return $labels[$roleName] ?? ($roleName ?: '—');
+}
+
+/**
+ * Projects: fixed category list offered in the create/edit forms, so a user
+ * can tell their own work apart from freelancing, demos, and personal projects.
+ */
+/**
+ * Project categories: admin-editable (see categories/index.php), not a fixed
+ * list -- new ones can be created and unwanted ones deleted.
+ */
+function projectCategories(): array
+{
+    global $db;
+    static $rows = null;
+    if ($rows === null) {
+        $rows = $db->query('SELECT name, icon FROM project_categories ORDER BY name')->fetchAll();
+    }
+    return $rows;
+}
+
+function projectCategoryOptions(): array
+{
+    return array_column(projectCategories(), 'name');
+}
+
+/**
+ * Plain-text-safe icon (a typed emoji, or a generic folder glyph when the
+ * category's icon is actually an uploaded image -- an <img> can't render
+ * inside a dropdown <option> or a plain e()-escaped string). Use
+ * projectCategoryIconHtml() instead anywhere real HTML can render.
+ */
+function projectCategoryIcon(string $category): string
+{
+    $icon = projectCategoryIconRaw($category);
+    return strpos($icon, '/') !== false ? '📁' : $icon;
+}
+
+function projectCategoryIconRaw(string $category): string
+{
+    foreach (projectCategories() as $row) {
+        if ($row['name'] === $category) {
+            return $row['icon'];
+        }
+    }
+    return '📁';
+}
+
+/**
+ * Real HTML rendering: shows the uploaded image when the category has one,
+ * otherwise the plain emoji. Caller must NOT wrap this in e() -- it's
+ * pre-escaped/safe HTML already.
+ */
+function projectCategoryIconHtml(string $category): string
+{
+    $icon = projectCategoryIconRaw($category);
+    if (strpos($icon, '/') !== false) {
+        return '<img src="' . e(BASE_URL . '/' . $icon) . '" class="category-icon-img" alt="">';
+    }
+    return e($icon);
+}
+
+/**
+ * Project types: a second, independent classification alongside category
+ * (e.g. Web App, Mobile App, API/Service). Same catalogue-table pattern as
+ * projectCategories() and friends above.
+ */
+function projectTypes(): array
+{
+    global $db;
+    static $rows = null;
+    if ($rows === null) {
+        $rows = $db->query('SELECT name, icon FROM project_types ORDER BY name')->fetchAll();
+    }
+    return $rows;
+}
+
+function projectTypeOptions(): array
+{
+    return array_column(projectTypes(), 'name');
+}
+
+function projectTypeIcon(string $type): string
+{
+    $icon = projectTypeIconRaw($type);
+    return strpos($icon, '/') !== false ? '🏷️' : $icon;
+}
+
+function projectTypeIconRaw(string $type): string
+{
+    foreach (projectTypes() as $row) {
+        if ($row['name'] === $type) {
+            return $row['icon'];
+        }
+    }
+    return '🏷️';
+}
+
+function projectTypeIconHtml(string $type): string
+{
+    $icon = projectTypeIconRaw($type);
+    if (strpos($icon, '/') !== false) {
+        return '<img src="' . e(BASE_URL . '/' . $icon) . '" class="category-icon-img" alt="">';
+    }
+    return e($icon);
+}
+
+/**
+ * Project workflow: task status options and their badge styling.
+ */
+function taskStatusOptions(): array
+{
+    return ['open' => 'Open', 'in_progress' => 'In Progress', 'done' => 'Done'];
+}
+
+function taskStatusBadgeClass(string $status): string
+{
+    return [
+        'open'        => 'badge--role',
+        'in_progress' => 'badge--warning',
+        'done'        => 'badge--success',
+    ][$status] ?? 'badge--role';
+}
+
+/**
+ * Renders a note/to-do's free-text body with simple list support: consecutive
+ * lines starting with "-", "*", or "•" become a real <ul>; consecutive lines
+ * starting with "1." / "1)" become a real <ol>. Everything else renders as
+ * plain text with line breaks, same as before. All text is escaped either way.
+ */
+function renderNoteBody(string $body): string
+{
+    $lines = preg_split('/\r\n|\r|\n/', $body);
+    $html = '';
+    $listItems = [];
+    $listTag = null;
+
+    $flush = function () use (&$html, &$listItems, &$listTag) {
+        if ($listTag !== null) {
+            $html .= "<$listTag>" . implode('', array_map(static fn ($i) => '<li>' . e($i) . '</li>', $listItems)) . "</$listTag>";
+            $listItems = [];
+            $listTag = null;
+        }
+    };
+
+    foreach ($lines as $line) {
+        if (preg_match('/^\s*[-*•]\s+(.*)$/', $line, $m)) {
+            if ($listTag !== null && $listTag !== 'ul') {
+                $flush();
+            }
+            $listTag = 'ul';
+            $listItems[] = $m[1];
+        } elseif (preg_match('/^\s*\d+[.)]\s+(.*)$/', $line, $m)) {
+            if ($listTag !== null && $listTag !== 'ol') {
+                $flush();
+            }
+            $listTag = 'ol';
+            $listItems[] = $m[1];
+        } else {
+            $flush();
+            if (trim($line) !== '') {
+                $html .= '<p>' . e($line) . '</p>';
+            }
+        }
+    }
+    $flush();
+
+    return $html;
+}
+
+/**
+ * A credential's "login role" within the target system it belongs to --
+ * distinct from Digital Locker's own Access Level. Convention: titles like
+ * "Admin — admin1" or "Teacher — teacher1" name the role before an em dash;
+ * anything without that separator is its own one-off group (e.g. "CRM Portal").
+ */
+function extractLoginRole(string $title): string
+{
+    $parts = preg_split('/\s*—\s*/u', $title, 2);
+    return trim($parts[0]) ?: $title;
+}
+
+/**
+ * Splits a title like "Admin — admin1" back into ['role' => 'Admin', 'base'
+ * => 'admin1'] for the Edit form's separate Role/System Name fields. A title
+ * with no em dash has no role: ['role' => '', 'base' => $title].
+ */
+function splitLoginRoleTitle(string $title): array
+{
+    $parts = preg_split('/\s*—\s*/u', $title, 2);
+    if (count($parts) === 2) {
+        return ['role' => trim($parts[0]), 'base' => trim($parts[1])];
+    }
+    return ['role' => '', 'base' => $title];
+}
+
+/**
+ * Distinct login roles already in use across the vault (e.g. "Admin",
+ * "Teacher"), for the Role field's autocomplete suggestions on the credential
+ * create/edit forms.
+ */
+function existingLoginRoles(): array
+{
+    global $db;
+    $roles = [];
+    foreach ($db->query('SELECT title FROM passwords')->fetchAll() as $row) {
+        $role = extractLoginRole($row['title']);
+        if ($role !== $row['title']) {
+            $roles[$role] = true;
+        }
+    }
+    $roles = array_keys($roles);
+    sort($roles, SORT_NATURAL | SORT_FLAG_CASE);
+    return $roles;
+}
+
+/**
+ * Everyone this user shares at least one project with, in a given project
+ * role -- e.g. a Manager's "My Team" (their testers) or a Tester's "Mentors"
+ * (their managers). Grouped so each teammate lists every shared project.
+ */
+function projectTeammates(int $userId, string $myProjectRole, string $wantProjectRole): array
+{
+    global $db;
+    $stmt = $db->prepare(
+        "SELECT u.id, u.username, u.full_name,
+                GROUP_CONCAT(DISTINCT p.name ORDER BY p.name SEPARATOR '||') AS shared_projects
+           FROM project_members my
+           JOIN project_members pm ON pm.project_id = my.project_id AND pm.project_role = :wantRole
+           JOIN users u ON u.id = pm.user_id
+           JOIN projects p ON p.id = pm.project_id
+          WHERE my.user_id = :uid AND my.project_role = :myRole
+          GROUP BY u.id
+          ORDER BY u.full_name"
+    );
+    $stmt->execute(['uid' => $userId, 'myRole' => $myProjectRole, 'wantRole' => $wantProjectRole]);
+    return $stmt->fetchAll();
+}
+
+/**
+ * Renders the Project Discussion feed -- shared between the full project
+ * page and the polling fragment endpoint so both stay pixel-identical.
+ */
+function renderProjectComments(array $comments): string
+{
+    if (!$comments) {
+        return '<p class="muted" id="discussion-empty">No discussion yet. Be the first to post an update or review.</p>';
+    }
+    $html = '';
+    foreach ($comments as $c) {
+        $html .= '<div class="discussion-post">'
+            . '<div class="discussion-post__meta"><strong>' . e($c['author_name']) . '</strong>'
+            . ' <span class="muted">' . e(date('M j, g:i A', strtotime($c['created_at']))) . '</span></div>'
+            . '<div class="discussion-post__body">' . nl2br(e($c['body'])) . '</div>'
+            . '</div>';
+    }
+    return $html;
 }
 
 /**

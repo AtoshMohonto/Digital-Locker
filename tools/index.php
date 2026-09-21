@@ -42,21 +42,6 @@ require __DIR__ . '/../includes/header.php';
                 <p class="muted">You need the <code>passwords.manage</code> permission to import.</p>
             <?php endif; ?>
         </div>
-
-        <div class="card">
-            <div class="card__header">
-                <h2 class="card__title">Import htdocs projects</h2>
-            </div>
-            <p class="muted">
-                Scan the htdocs folder and import each project folder into the locker as a
-                project plus an empty password entry.
-            </p>
-            <?php if (hasPermission('projects.manage')): ?>
-                <a class="btn" href="<?= BASE_URL ?>/tools/import_htdocs.php">Scan htdocs</a>
-            <?php else: ?>
-                <p class="muted">You need the <code>projects.manage</code> permission to import.</p>
-            <?php endif; ?>
-        </div>
     </div>
 </div>
 

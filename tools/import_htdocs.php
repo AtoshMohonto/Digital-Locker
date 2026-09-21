@@ -1,12 +1,14 @@
 <?php
 /**
- * Import htdocs project folders into the locker.
- * Each selected folder becomes a Project and gets a matching empty password
- * entry (title = folder name) so credentials can be filled in later.
- * Requires projects.manage.
+ * Retired: this tool used to bulk-create a project + empty placeholder
+ * credential for every htdocs folder, which left the vault cluttered with
+ * blank entries. Removed for every role at the user's request.
  */
 require_once __DIR__ . '/../includes/init.php';
-requirePermission('projects.manage');
+requireLogin();
+
+flash('error', 'The htdocs import tool has been removed.');
+redirect(BASE_URL . '/projects/index.php');
 
 $pageTitle = 'Import htdocs projects';
 $activePage = 'projects';

@@ -143,3 +143,45 @@ function activeAdministratorCount(?int $excludeUserId = null): int
     $stmt->execute($params);
     return (int) $stmt->fetchColumn();
 }
+
+/**
+ * Whether the current user can see a project's credentials/Team/Tasks/
+ * Discussion. Administrators reach every project unconditionally; everyone
+ * else (Manager or Tester) is scoped to specifically the project(s) they've
+ * been added to as a team member -- a Manager does not automatically manage
+ * every project, only the ones assigned to them.
+ */
+function canAccessProject(int $projectId): bool
+{
+    if (isAdministrator()) {
+        return true;
+    }
+    global $db;
+    $stmt = $db->prepare('SELECT 1 FROM project_members WHERE project_id = :pid AND user_id = :uid');
+    $stmt->execute(['pid' => $projectId, 'uid' => (int) currentUser()['id']]);
+    return (bool) $stmt->fetchColumn();
+}
+
+/**
+ * This user's membership row for a project, or null if they're not on the team.
+ */
+function myProjectRole(int $projectId): ?string
+{
+    global $db;
+    $stmt = $db->prepare('SELECT project_role FROM project_members WHERE project_id = :pid AND user_id = :uid');
+    $stmt->execute(['pid' => $projectId, 'uid' => (int) currentUser()['id']]);
+    $role = $stmt->fetchColumn();
+    return $role === false ? null : $role;
+}
+
+/**
+ * Whether this user is on the team of at least one project -- used to decide
+ * if a Tester (no projects.manage) should see "My Projects" at all.
+ */
+function hasAnyProjectMembership(): bool
+{
+    global $db;
+    $stmt = $db->prepare('SELECT 1 FROM project_members WHERE user_id = :uid LIMIT 1');
+    $stmt->execute(['uid' => (int) currentUser()['id']]);
+    return (bool) $stmt->fetchColumn();
+}

@@ -18,8 +18,11 @@ $sql = 'SELECT id, title, category, username, url, updated_at FROM personal_pass
 $params = ['uid' => $userId];
 
 if ($filterSearch !== '') {
-    $sql .= ' AND (title LIKE :q OR username LIKE :q OR url LIKE :q)';
-    $params['q'] = '%' . $filterSearch . '%';
+    $sql .= ' AND (title LIKE :q1 OR username LIKE :q2 OR url LIKE :q3)';
+    $like = '%' . $filterSearch . '%';
+    $params['q1'] = $like;
+    $params['q2'] = $like;
+    $params['q3'] = $like;
 }
 
 $sql .= ' ORDER BY title ASC';

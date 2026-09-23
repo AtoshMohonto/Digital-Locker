@@ -163,6 +163,51 @@ function canAccessProject(int $projectId): bool
 }
 
 /**
+ * Projects this user may pick from a project dropdown: every project for an
+ * Administrator, or only the ones they're a member of otherwise. Used
+ * anywhere a project gets attached to something (a credential, a note) so
+ * the picker itself can't be used to discover projects you're not on.
+ */
+function myAccessibleProjects(): array
+{
+    global $db;
+    if (isAdministrator()) {
+        return $db->query('SELECT id, name, category, type FROM projects ORDER BY name')->fetchAll();
+    }
+    $stmt = $db->prepare(
+        'SELECT p.id, p.name, p.category, p.type FROM projects p
+           JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = :uid
+          ORDER BY p.name'
+    );
+    $stmt->execute(['uid' => (int) currentUser()['id']]);
+    return $stmt->fetchAll();
+}
+
+/**
+ * Whether the current user may see/reveal/edit this credential at all, based
+ * on project membership -- an Administrator always can; a Manager or Tester
+ * only if the credential belongs to a project they're a member of. A
+ * credential with no project (project_id NULL) is out of scope for everyone
+ * but an Administrator, same as everything else here: this is a distinct
+ * check from canAccessCredential(), which is the separate Access Level (RBAC
+ * role) gate on top of this project scope.
+ */
+function canAccessCredentialProject(int $passwordId): bool
+{
+    if (isAdministrator()) {
+        return true;
+    }
+    global $db;
+    $stmt = $db->prepare('SELECT project_id FROM passwords WHERE id = :id');
+    $stmt->execute(['id' => $passwordId]);
+    $projectId = $stmt->fetchColumn();
+    if (!$projectId) {
+        return false;
+    }
+    return canAccessProject((int) $projectId);
+}
+
+/**
  * This user's membership row for a project, or null if they're not on the team.
  */
 function myProjectRole(int $projectId): ?string

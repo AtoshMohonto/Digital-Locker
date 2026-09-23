@@ -13,6 +13,7 @@ USE digital_locker;
 -- ---------------------------------------------------------------------------
 DROP TABLE IF EXISTS project_categories;
 DROP TABLE IF EXISTS project_types;
+DROP TABLE IF EXISTS credential_types;
 DROP TABLE IF EXISTS personal_notes;
 DROP TABLE IF EXISTS project_comments;
 DROP TABLE IF EXISTS project_tasks;
@@ -76,8 +77,20 @@ CREATE TABLE projects (
   name        VARCHAR(100) NOT NULL UNIQUE,
   category    VARCHAR(60)  NOT NULL DEFAULT '',
   type        VARCHAR(60)  NOT NULL DEFAULT '',
+  role        VARCHAR(80)  NOT NULL DEFAULT '',
   description VARCHAR(255) NOT NULL DEFAULT '',
   created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- Project "Role": the web app's functional purpose (Data Collection,
+-- E-commerce, Login System, ...), a flat catalog -- suggestions narrowed to
+-- a given project's Category+Type combo are computed from actual projects
+-- at read time (see projectPurposesByContext() in includes/functions.php),
+-- not stored here.
+CREATE TABLE project_purposes (
+  id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name       VARCHAR(80) NOT NULL UNIQUE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------------------------
@@ -112,6 +125,20 @@ CREATE TABLE password_roles (
   UNIQUE KEY uniq_password_role (password_id, role_id),
   CONSTRAINT fk_pr_password FOREIGN KEY (password_id) REFERENCES passwords(id) ON DELETE CASCADE,
   CONSTRAINT fk_pr_role     FOREIGN KEY (role_id)      REFERENCES roles(id)     ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- Credential Assignments: several Managers and several Testers can be marked
+-- against one credential at once (the Assignments page's "Assign Manager" /
+-- "Assign Tester" pickers), independent of passwords.assigned_to.
+CREATE TABLE password_assignees (
+  id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  password_id INT UNSIGNED NOT NULL,
+  user_id     INT UNSIGNED NOT NULL,
+  kind        ENUM('manager','tester') NOT NULL,
+  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_password_assignee (password_id, user_id, kind),
+  CONSTRAINT fk_pa_password FOREIGN KEY (password_id) REFERENCES passwords(id) ON DELETE CASCADE,
+  CONSTRAINT fk_pa_user     FOREIGN KEY (user_id)     REFERENCES users(id)     ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------------------------
@@ -189,12 +216,13 @@ CREATE TABLE project_tasks (
 ) ENGINE=InnoDB;
 
 CREATE TABLE project_comments (
-  id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  project_id  INT UNSIGNED NOT NULL,
-  user_id     INT UNSIGNED NULL,
-  author_name VARCHAR(120) NOT NULL DEFAULT '',
-  body        TEXT NOT NULL,
-  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  id              INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  project_id      INT UNSIGNED NOT NULL,
+  user_id         INT UNSIGNED NULL,
+  author_name     VARCHAR(120) NOT NULL DEFAULT '',
+  body            TEXT NOT NULL,
+  attachment_path VARCHAR(255) NULL,
+  created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_pc_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   CONSTRAINT fk_pc_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
@@ -222,6 +250,14 @@ CREATE TABLE project_types (
   id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   name       VARCHAR(60) NOT NULL UNIQUE,
   icon       VARCHAR(255) NOT NULL DEFAULT '🏷️',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- Credential "Type" (the "Role — System Name" prefix, e.g. Admin, Teacher):
+-- same catalogue-table pattern, managed alongside project categories/types.
+CREATE TABLE credential_types (
+  id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name       VARCHAR(60) NOT NULL UNIQUE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
@@ -287,6 +323,10 @@ INSERT INTO project_categories (name, icon) VALUES
 INSERT INTO project_types (name, icon) VALUES
   ('Web App', '🌐'), ('Mobile App', '📱'), ('Desktop App', '🖥️'),
   ('API/Service', '🔌'), ('Other', '🏷️');
+
+INSERT INTO project_purposes (name) VALUES
+  ('Data Collection'), ('E-commerce'), ('Login System'), ('Portfolio Site'),
+  ('Blog/CMS'), ('Internal Tool'), ('API/Backend Service'), ('Other');
 
 INSERT INTO projects (id, name, category, description) VALUES
   (1, 'General',        'Work', 'Shared and default passwords'),

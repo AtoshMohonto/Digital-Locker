@@ -21,7 +21,21 @@ $totalUsers     = (int) $db->query('SELECT COUNT(*) FROM users')->fetchColumn();
 $totalRoles     = (int) $db->query('SELECT COUNT(*) FROM roles')->fetchColumn();
 
 $canViewVault = hasPermission('passwords.view');
-$totalPasswords = $canViewVault ? (int) $db->query('SELECT COUNT(*) FROM passwords')->fetchColumn() : 0;
+if (!$canViewVault) {
+    $totalPasswords = 0;
+} elseif (isAdministrator()) {
+    $totalPasswords = (int) $db->query('SELECT COUNT(*) FROM passwords')->fetchColumn();
+} else {
+    // Same project scoping as the Credential Vault list: the stat card must
+    // match what this user can actually see, not the whole system's count.
+    $stmt = $db->prepare(
+        'SELECT COUNT(*) FROM passwords p
+          WHERE p.project_id IS NOT NULL
+            AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.project_id AND pm.user_id = :uid)'
+    );
+    $stmt->execute(['uid' => (int) currentUser()['id']]);
+    $totalPasswords = (int) $stmt->fetchColumn();
+}
 
 $recent = [];
 if ($canViewVault) {
@@ -35,7 +49,7 @@ if ($canViewVault) {
           LIMIT 20'
     )->fetchAll();
     foreach ($candidates as $row) {
-        if (canAccessCredential((int) $row['id'])) {
+        if (canAccessCredentialProject((int) $row['id']) && canAccessCredential((int) $row['id'])) {
             $recent[] = $row;
             if (count($recent) >= 6) {
                 break;

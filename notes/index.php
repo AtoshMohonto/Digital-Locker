@@ -10,7 +10,7 @@ $pageTitle = 'My Notes & To-Do';
 $activePage = 'notes';
 
 $userId = currentUser()['id'];
-$projects = $db->query('SELECT id, name FROM projects ORDER BY name')->fetchAll();
+$projects = myAccessibleProjects();
 $filterProject = isset($_GET['project']) ? (int) $_GET['project'] : 0;
 
 $sql = 'SELECT n.*, p.name AS project_name FROM personal_notes n LEFT JOIN projects p ON p.id = n.project_id WHERE n.user_id = :uid';

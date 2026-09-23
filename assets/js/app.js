@@ -134,6 +134,17 @@
                 input.focus();
             }
         }
+        // Bulk Add Credentials: one Generate button per row -- finds the
+        // password input in the same row rather than a single fixed id.
+        if (e.target && e.target.classList && e.target.classList.contains('bulk-generate-btn')) {
+            e.preventDefault();
+            var row = e.target.closest('tr');
+            var rowInput = row ? row.querySelector('.bulk-password') : null;
+            if (rowInput) {
+                rowInput.value = generatePassword(18);
+                rowInput.focus();
+            }
+        }
     });
 
     function generatePassword(length) {

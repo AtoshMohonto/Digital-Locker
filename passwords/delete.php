@@ -16,7 +16,7 @@ $titleStmt = $db->prepare('SELECT title FROM passwords WHERE id = :id');
 $titleStmt->execute(['id' => $id]);
 $title = (string) $titleStmt->fetchColumn();
 
-if (!canAccessCredential($id)) {
+if (!canAccessCredentialProject($id) || !canAccessCredential($id)) {
     logAudit('delete_denied', $id, $title);
     require __DIR__ . '/../403.php';
     exit;

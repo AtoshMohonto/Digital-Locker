@@ -1,24 +1,34 @@
 <?php
 /**
  * Export all password entries as a CSV file.
- * Secrets are decrypted so this export is a full backup / migration tool.
- * Requires passwords.view (the same level needed to reveal a secret).
+ * Secrets are decrypted so this export is a full backup / migration tool --
+ * requires passwords.manage (Administrator/Manager only). A Tester has
+ * read-only vault access and never gets export capability. A Manager's
+ * export is scoped to their own accessible projects, same as everywhere
+ * else in the vault; an Administrator gets everything.
  */
 require_once __DIR__ . '/../includes/init.php';
-requirePermission('passwords.view');
+requirePermission('passwords.manage');
 
-$stmt = $db->query(
-    'SELECT p.id, p.title, p.category, p.username, p.encrypted, p.url, p.notes, p.extra_info,
-            u.username AS assigned_username, u.full_name AS assigned_full_name, pj.name AS project_name,
-            GROUP_CONCAT(r.name ORDER BY r.name SEPARATOR "; ") AS role_names
-       FROM passwords p
-       LEFT JOIN users u ON u.id = p.assigned_to
-       LEFT JOIN projects pj ON pj.id = p.project_id
-       LEFT JOIN password_roles pr ON pr.password_id = p.id
-       LEFT JOIN roles r ON r.id = pr.role_id
-      GROUP BY p.id
-      ORDER BY p.title ASC'
-);
+$sql = 'SELECT p.id, p.title, p.category, p.username, p.encrypted, p.url, p.notes, p.extra_info,
+               u.username AS assigned_username, u.full_name AS assigned_full_name, pj.name AS project_name,
+               GROUP_CONCAT(r.name ORDER BY r.name SEPARATOR "; ") AS role_names
+          FROM passwords p
+          LEFT JOIN users u ON u.id = p.assigned_to
+          LEFT JOIN projects pj ON pj.id = p.project_id
+          LEFT JOIN password_roles pr ON pr.password_id = p.id
+          LEFT JOIN roles r ON r.id = pr.role_id';
+$params = [];
+if (!isAdministrator()) {
+    $sql .= ' WHERE p.project_id IS NOT NULL AND EXISTS (
+                  SELECT 1 FROM project_members pm WHERE pm.project_id = p.project_id AND pm.user_id = :uid
+              )';
+    $params['uid'] = (int) currentUser()['id'];
+}
+$sql .= ' GROUP BY p.id ORDER BY p.title ASC';
+
+$stmt = $db->prepare($sql);
+$stmt->execute($params);
 
 $filename = 'digital-locker-passwords-' . date('Y-m-d-His') . '.csv';
 

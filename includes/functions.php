@@ -390,6 +390,162 @@ function projectTypeIconHtml(string $type): string
 }
 
 /**
+ * Credential "Type" catalog (the "Role — System Name" prefix, e.g. Admin,
+ * Teacher). A real, admin/manager-editable table, same pattern as project
+ * categories/types -- new values typed on the credential form get remembered
+ * here too (see passwords/create.php and edit.php).
+ */
+function credentialTypeOptions(): array
+{
+    global $db;
+    return $db->query('SELECT name FROM credential_types ORDER BY name')->fetchAll(PDO::FETCH_COLUMN);
+}
+
+/** Remembers a newly-typed credential Type so it shows up as a suggestion next time. */
+function rememberCredentialType(string $name): void
+{
+    if ($name === '') {
+        return;
+    }
+    global $db;
+    $db->prepare('INSERT IGNORE INTO credential_types (name) VALUES (:name)')->execute(['name' => $name]);
+}
+
+/**
+ * Project Category and Type are now free-text-with-suggestions on the New/
+ * Edit Project form (select an existing one, or just type a new one) rather
+ * than a fixed dropdown -- a typed value gets remembered into the same
+ * catalog tables the Categories admin page manages, default icon until
+ * someone gives it a real one there.
+ */
+function rememberProjectCategory(string $name): void
+{
+    if ($name === '') {
+        return;
+    }
+    global $db;
+    $db->prepare('INSERT IGNORE INTO project_categories (name, icon) VALUES (:name, :icon)')
+        ->execute(['name' => $name, 'icon' => '📁']);
+}
+
+function rememberProjectType(string $name): void
+{
+    if ($name === '') {
+        return;
+    }
+    global $db;
+    $db->prepare('INSERT IGNORE INTO project_types (name, icon) VALUES (:name, :icon)')
+        ->execute(['name' => $name, 'icon' => '🏷️']);
+}
+
+/**
+ * Project "Role": the web app's functional purpose (Data Collection,
+ * E-commerce, Login System, ...). A flat catalog of known values (seeded
+ * with common ones, grows as people type new ones), separate from the
+ * per-(category, type) suggestion map built from actual projects in
+ * projectPurposesByContext() -- that's what makes the datalist "show
+ * according to type and category" on the form.
+ */
+function projectPurposeOptions(): array
+{
+    global $db;
+    return $db->query('SELECT name FROM project_purposes ORDER BY name')->fetchAll(PDO::FETCH_COLUMN);
+}
+
+/** Remembers a newly-typed project Role so it shows up as a suggestion next time. */
+function rememberProjectPurpose(string $name): void
+{
+    if ($name === '') {
+        return;
+    }
+    global $db;
+    $db->prepare('INSERT IGNORE INTO project_purposes (name) VALUES (:name)')->execute(['name' => $name]);
+}
+
+/**
+ * Every Role value already used on a project, grouped by that project's
+ * (category, type) pair -- so the Role datalist on the form can be
+ * narrowed to "what's usually picked for a Freelancing + Web App project"
+ * instead of the whole flat catalog every time.
+ */
+function projectPurposesByContext(): array
+{
+    global $db;
+    $map = [];
+    $rows = $db->query(
+        "SELECT DISTINCT category, type, role FROM projects WHERE role != '' ORDER BY role"
+    )->fetchAll();
+    foreach ($rows as $row) {
+        $key = $row['category'] . '|' . $row['type'];
+        $map[$key][] = $row['role'];
+    }
+    return $map;
+}
+
+/**
+ * Every active user's single "primary" role name (Manager, Tester,
+ * Administrator, or Other for anyone with no recognized role), in that
+ * priority order for a user holding more than one. Shared by
+ * usersGroupedByRole() (for the grouped dropdown) and anywhere that just
+ * needs a quick "what role is this person" badge next to their name.
+ */
+function primaryRoleNameByUser(): array
+{
+    global $db;
+    $order = ['Manager', 'Tester', 'Administrator'];
+
+    $roleByUser = [];
+    foreach (
+        $db->query('SELECT ur.user_id, r.name FROM user_roles ur JOIN roles r ON r.id = ur.role_id')->fetchAll()
+        as $row
+    ) {
+        $roleByUser[(int) $row['user_id']][] = $row['name'];
+    }
+
+    $primary = [];
+    foreach ($db->query('SELECT id FROM users WHERE is_active = 1')->fetchAll() as $u) {
+        $uid = (int) $u['id'];
+        $userRoles = $roleByUser[$uid] ?? [];
+        $primary[$uid] = 'Other';
+        foreach ($order as $roleName) {
+            if (in_array($roleName, $userRoles, true)) {
+                $primary[$uid] = $roleName;
+                break;
+            }
+        }
+    }
+    return $primary;
+}
+
+/**
+ * Active users for an "Assigned To" picker, grouped for a proper <optgroup>
+ * dropdown in priority order: Managers first, then Testers, then
+ * Administrators, then anyone with no recognized role. A user holding
+ * several roles is listed once, under their highest-priority group.
+ */
+function usersGroupedByRole(): array
+{
+    global $db;
+    $labels = ['Manager' => 'Managers', 'Tester' => 'Testers', 'Administrator' => 'Administrators', 'Other' => 'Other'];
+
+    $users = $db->query('SELECT id, username, full_name FROM users WHERE is_active = 1 ORDER BY username')->fetchAll();
+    $primary = primaryRoleNameByUser();
+
+    $groups = ['Manager' => [], 'Tester' => [], 'Administrator' => [], 'Other' => []];
+    foreach ($users as $u) {
+        $groups[$primary[(int) $u['id']] ?? 'Other'][] = $u;
+    }
+
+    $result = [];
+    foreach ($groups as $key => $list) {
+        if ($list) {
+            $result[] = ['label' => $labels[$key], 'users' => $list];
+        }
+    }
+    return $result;
+}
+
+/**
  * Project workflow: task status options and their badge styling.
  */
 function taskStatusOptions(): array
@@ -525,18 +681,69 @@ function projectTeammates(int $userId, string $myProjectRole, string $wantProjec
  * Renders the Project Discussion feed -- shared between the full project
  * page and the polling fragment endpoint so both stay pixel-identical.
  */
+/** First letter of up to two words (e.g. "Atosh Mohonto" -> "AM"), for an avatar badge. */
+function initials(string $name): string
+{
+    $parts = preg_split('/\s+/', trim($name));
+    $letters = array_map(static fn ($p) => mb_strtoupper(mb_substr($p, 0, 1)), array_filter($parts));
+    return implode('', array_slice($letters, 0, 2)) ?: '?';
+}
+
+/**
+ * A short "Today" / "Yesterday" / "Mon, Sep 21" divider label for a chat
+ * message's date, grouping the feed the way a real chat client does.
+ */
+function relativeDayLabel(string $datetime): string
+{
+    $day = date('Y-m-d', strtotime($datetime));
+    if ($day === date('Y-m-d')) {
+        return 'Today';
+    }
+    if ($day === date('Y-m-d', strtotime('-1 day'))) {
+        return 'Yesterday';
+    }
+    return date('D, M j', strtotime($datetime));
+}
+
+/**
+ * Renders the Project Discussion feed as chat bubbles: the current viewer's
+ * own messages align right in the accent color (no name label, it's
+ * obviously theirs), everyone else's align left with an avatar and name,
+ * grouped under "Today" / "Yesterday" / date dividers like a real chat app.
+ */
 function renderProjectComments(array $comments): string
 {
     if (!$comments) {
         return '<p class="muted" id="discussion-empty">No discussion yet. Be the first to post an update or review.</p>';
     }
+    $myId = isLoggedIn() ? (int) currentUser()['id'] : 0;
     $html = '';
+    $lastDay = '';
     foreach ($comments as $c) {
-        $html .= '<div class="discussion-post">'
-            . '<div class="discussion-post__meta"><strong>' . e($c['author_name']) . '</strong>'
-            . ' <span class="muted">' . e(date('M j, g:i A', strtotime($c['created_at']))) . '</span></div>'
-            . '<div class="discussion-post__body">' . nl2br(e($c['body'])) . '</div>'
-            . '</div>';
+        $day = date('Y-m-d', strtotime($c['created_at']));
+        if ($day !== $lastDay) {
+            $html .= '<div class="chat-divider"><span>' . e(relativeDayLabel($c['created_at'])) . '</span></div>';
+            $lastDay = $day;
+        }
+
+        $isMine = $myId > 0 && (int) $c['user_id'] === $myId;
+        $html .= '<div class="chat-row' . ($isMine ? ' chat-row--mine' : '') . '">';
+        if (!$isMine) {
+            $html .= '<span class="chat-row__avatar">' . e(initials($c['author_name'])) . '</span>';
+        }
+        $html .= '<div class="chat-bubble' . ($isMine ? ' chat-bubble--mine' : '') . '">';
+        if (!$isMine) {
+            $html .= '<div class="chat-bubble__author">' . e($c['author_name']) . '</div>';
+        }
+        if (!empty($c['attachment_path'])) {
+            $src = e(BASE_URL . '/' . $c['attachment_path']);
+            $html .= '<a href="' . $src . '" target="_blank" rel="noopener" class="chat-bubble__attachment"><img src="' . $src . '" alt="Attached image" loading="lazy"></a>';
+        }
+        if (trim((string) $c['body']) !== '') {
+            $html .= '<div class="chat-bubble__body">' . nl2br(e($c['body'])) . '</div>';
+        }
+        $html .= '<div class="chat-bubble__time">' . e(date('g:i A', strtotime($c['created_at']))) . '</div>'
+            . '</div></div>';
     }
     return $html;
 }

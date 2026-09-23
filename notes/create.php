@@ -8,7 +8,7 @@ require_once __DIR__ . '/../includes/init.php';
 requireLogin();
 
 $userId = currentUser()['id'];
-$projects = $db->query('SELECT id, name FROM projects ORDER BY name')->fetchAll();
+$projects = myAccessibleProjects();
 
 /** Server-decided redirect target -- never trusts a client-supplied URL. */
 function notesRedirect(?int $projectId): void

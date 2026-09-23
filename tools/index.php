@@ -25,7 +25,11 @@ require __DIR__ . '/../includes/header.php';
                 Download every vault entry as a CSV file. Secrets are decrypted in the file,
                 so treat it as sensitive backup data.
             </p>
-            <a class="btn btn--primary" href="<?= BASE_URL ?>/passwords/export.php">Download CSV</a>
+            <?php if (hasPermission('passwords.manage')): ?>
+                <a class="btn btn--primary" href="<?= BASE_URL ?>/passwords/export.php">Download CSV</a>
+            <?php else: ?>
+                <p class="muted">You need the <code>passwords.manage</code> permission to export.</p>
+            <?php endif; ?>
         </div>
 
         <div class="card">

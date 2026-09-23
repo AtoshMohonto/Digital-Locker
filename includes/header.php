@@ -40,20 +40,14 @@ function sidebarGroups(): array
             ['key' => 'team', 'href' => '/team/index.php', 'icon' => 'team', 'label' => isAdministrator() ? 'Managers & Testers' : (hasPermission('tasks.manage') ? 'My Team' : 'Mentors'), 'show' => true],
         ]],
         'administration' => ['label' => 'Administration', 'items' => [
-            ['key' => 'assignments', 'href' => '/passwords/assignments.php', 'icon' => 'assignments', 'label' => 'Credential Assignments', 'show' => isAdministrator()],
-            ['key' => 'categories', 'href' => '/categories/index.php', 'icon' => 'categories', 'label' => 'Project Categories & Types', 'show' => isAdministrator()],
+            ['key' => 'assignments', 'href' => '/passwords/assignments.php', 'icon' => 'assignments', 'label' => 'Credential Assignments', 'show' => hasPermission('passwords.manage')],
+            ['key' => 'categories', 'href' => '/categories/index.php', 'icon' => 'categories', 'label' => 'Project Categories & Types', 'show' => true],
             ['key' => 'roles', 'href' => '/roles/index.php', 'icon' => 'roles', 'label' => 'Roles &amp; Permissions', 'show' => hasPermission('roles.manage')],
             ['key' => 'users', 'href' => '/users/index.php', 'icon' => 'users', 'label' => 'User Accounts', 'show' => hasPermission('users.manage')],
             ['key' => 'settings', 'href' => '/settings/index.php', 'icon' => 'settings', 'label' => 'Password Settings', 'show' => hasPermission('settings.manage')],
+            ['key' => 'reset', 'href' => '/settings/reset.php', 'icon' => 'reset', 'label' => 'Factory Reset', 'show' => isAdministrator()],
         ]],
     ];
-}
-
-function initials(string $name): string
-{
-    $parts = preg_split('/\s+/', trim($name));
-    $letters = array_map(static fn ($p) => mb_strtoupper(mb_substr($p, 0, 1)), array_filter($parts));
-    return implode('', array_slice($letters, 0, 2)) ?: '?';
 }
 
 function navIcon(string $name): string
@@ -72,6 +66,7 @@ function navIcon(string $name): string
         'roles'     => '<path d="M12 3l8 3v6c0 4.5-3.2 7.6-8 9-4.8-1.4-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
         'users'     => '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.5 3-5.5 6.5-5.5s6.5 2 6.5 5.5M16 4.5a3.5 3.5 0 0 1 0 7M17.5 14.5c2.5.6 4 2.3 4 5.5"/>',
         'settings'  => '<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/>',
+        'reset'     => '<path d="M3 12a9 9 0 1 1 3 6.7"/><path d="M3 21v-5h5"/>',
         'logout'    => '<path d="M14 4H5v16h9M10 12h11M18 8l4 4-4 4"/>',
         'lock'      => '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3M12 15v3"/>',
     ];

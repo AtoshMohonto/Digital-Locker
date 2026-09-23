@@ -22,6 +22,14 @@ if (!$item) {
     redirect(BASE_URL . '/passwords/index.php');
 }
 
+// A Manager/Tester may only view credentials belonging to a project they're
+// a member of -- same scoping as the Credential Vault list, so this page
+// can't be reached directly by guessing an id either.
+if (!canAccessCredentialProject($id)) {
+    require __DIR__ . '/../403.php';
+    exit;
+}
+
 $roleStmt = $db->prepare(
     'SELECT r.name FROM password_roles pr JOIN roles r ON r.id = pr.role_id WHERE pr.password_id = :id ORDER BY r.name'
 );

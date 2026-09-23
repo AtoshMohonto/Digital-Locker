@@ -16,7 +16,7 @@ if (!$item) {
     redirect(BASE_URL . '/passwords/index.php');
 }
 
-if (!canAccessCredential($id)) {
+if (!canAccessCredentialProject($id) || !canAccessCredential($id)) {
     logAudit('edit_denied', $id, $item['title']);
     require __DIR__ . '/../403.php';
     exit;
@@ -25,11 +25,13 @@ if (!canAccessCredential($id)) {
 $pageTitle = 'Edit: ' . $item['title'];
 $activePage = 'passwords';
 
-$roles      = $db->query('SELECT id, name FROM roles ORDER BY name')->fetchAll();
-$users      = $db->query('SELECT id, username, full_name FROM users WHERE is_active = 1 ORDER BY username')->fetchAll();
-$projects   = $db->query('SELECT id, name FROM projects ORDER BY name')->fetchAll();
+$roles = $db->query('SELECT id, name FROM roles ORDER BY name')->fetchAll();
+$userGroups = usersGroupedByRole();
+// Same project scoping as the create form: a Manager can only re-file this
+// credential under a project they're a member of, not any project.
+$projects = myAccessibleProjects();
 $categories = categoryOptions();
-$loginRoles = existingLoginRoles();
+$loginRoles = credentialTypeOptions();
 
 $roleStmt = $db->prepare('SELECT role_id FROM password_roles WHERE password_id = :id');
 $roleStmt->execute(['id' => $id]);
@@ -75,6 +77,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($old['title'] === '') {
             $errors[] = 'System name is required.';
         }
+        if ($old['project_id'] > 0 && !canAccessProject($old['project_id'])) {
+            $errors[] = 'You are not a member of that project.';
+        }
 
         if ($old['password'] !== '' && validatePasswordPolicy($old['password'], effectivePolicy())) {
             $errors = array_merge($errors, validatePasswordPolicy($old['password'], effectivePolicy()));
@@ -92,6 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $db->beginTransaction();
 
             $finalTitle = $old['login_role'] !== '' ? $old['login_role'] . ' — ' . $old['title'] : $old['title'];
+            rememberCredentialType($old['login_role']);
 
             $stmt = $db->prepare(
                 'UPDATE passwords
@@ -220,8 +226,12 @@ require __DIR__ . '/../includes/header.php';
             <label for="assigned_to">Assigned To <span class="muted">(who's using it)</span></label>
             <select id="assigned_to" name="assigned_to">
                 <option value="0">— Unassigned / Shared —</option>
-                <?php foreach ($users as $u): ?>
-                    <option value="<?= (int) $u['id'] ?>" <?= $old['assigned_to'] === (int) $u['id'] ? 'selected' : '' ?>><?= e($u['full_name'] ?: $u['username']) ?></option>
+                <?php foreach ($userGroups as $group): ?>
+                    <optgroup label="<?= e($group['label']) ?>">
+                        <?php foreach ($group['users'] as $u): ?>
+                            <option value="<?= (int) $u['id'] ?>" <?= $old['assigned_to'] === (int) $u['id'] ? 'selected' : '' ?>><?= e($u['full_name'] ?: $u['username']) ?></option>
+                        <?php endforeach; ?>
+                    </optgroup>
                 <?php endforeach; ?>
             </select>
         </div>

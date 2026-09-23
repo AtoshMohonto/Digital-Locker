@@ -1,0 +1,5 @@
+# Uploaded chat attachments are never meant to be executed as scripts.
+php_flag engine off
+<FilesMatch "\.(php|php\d|phtml|pht)$">
+    Require all denied
+</FilesMatch>

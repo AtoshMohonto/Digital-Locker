@@ -17,7 +17,7 @@ if (!$item) {
     redirect(BASE_URL . '/notes/index.php');
 }
 
-$projects = $db->query('SELECT id, name FROM projects ORDER BY name')->fetchAll();
+$projects = myAccessibleProjects();
 
 $errors = [];
 $old = [

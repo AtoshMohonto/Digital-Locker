@@ -98,13 +98,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($do === 'post_comment') {
         $body = trim($_POST['body'] ?? '');
-        if ($body !== '') {
-            $db->prepare('INSERT INTO project_comments (project_id, user_id, author_name, body) VALUES (:pid, :uid, :name, :body)')
+        $attachmentPath = null;
+
+        if (!empty($_FILES['attachment']['name'])) {
+            $uploaded = $_FILES['attachment'];
+            $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif', 'image/webp' => 'webp'];
+            if ($uploaded['error'] !== UPLOAD_ERR_OK) {
+                flash('error', 'Image upload failed. Please try again.');
+            } elseif ($uploaded['size'] > 6 * 1024 * 1024) {
+                flash('error', 'Image must be 6MB or smaller.');
+            } else {
+                $mime = mime_content_type($uploaded['tmp_name']);
+                if (!isset($allowed[$mime]) || @getimagesize($uploaded['tmp_name']) === false) {
+                    flash('error', 'Attachment must be a JPG, PNG, GIF, or WEBP image.');
+                } else {
+                    $uploadDir = __DIR__ . '/../assets/uploads/discussion/' . $id;
+                    if (!is_dir($uploadDir)) {
+                        mkdir($uploadDir, 0755, true);
+                    }
+                    $filename = bin2hex(random_bytes(16)) . '.' . $allowed[$mime];
+                    if (move_uploaded_file($uploaded['tmp_name'], $uploadDir . '/' . $filename)) {
+                        $attachmentPath = 'assets/uploads/discussion/' . $id . '/' . $filename;
+                    } else {
+                        flash('error', 'Could not save the attached image.');
+                    }
+                }
+            }
+        }
+
+        if ($body !== '' || $attachmentPath !== null) {
+            $db->prepare('INSERT INTO project_comments (project_id, user_id, author_name, body, attachment_path) VALUES (:pid, :uid, :name, :body, :attachment)')
                 ->execute([
-                    'pid'  => $id,
-                    'uid'  => $myUserId,
-                    'name' => currentUser()['full_name'] ?: currentUser()['username'],
-                    'body' => $body,
+                    'pid'        => $id,
+                    'uid'        => $myUserId,
+                    'name'       => currentUser()['full_name'] ?: currentUser()['username'],
+                    'body'       => $body,
+                    'attachment' => $attachmentPath,
                 ]);
         }
         redirect(BASE_URL . '/projects/view.php?id=' . $id . '#discussion');
@@ -146,6 +175,7 @@ $members = $db->prepare(
 $members->execute(['pid' => $id]);
 $members = $members->fetchAll();
 $memberUserIds = array_column($members, 'user_id');
+$projectManagers = array_values(array_filter($members, static fn ($m) => $m['project_role'] === 'manager'));
 
 // Candidates for "add member": active Manager/Tester users not already on the team.
 $candidates = $db->prepare(
@@ -190,7 +220,7 @@ require __DIR__ . '/../includes/header.php';
 <div class="card">
     <div class="card__header card__header--stack">
         <div>
-            <h2 class="card__title"><?= $project['category'] ? e(projectCategoryIcon($project['category'])) : '📁' ?> <?= e($project['name']) ?><?php if ($project['category']): ?> <span class="badge badge--role"><?= e($project['category']) ?></span><?php endif; ?><?php if ($project['type']): ?> <span class="badge badge--role"><?= e(projectTypeIcon($project['type'])) ?> <?= e($project['type']) ?></span><?php endif; ?></h2>
+            <h2 class="card__title"><?= $project['category'] ? e(projectCategoryIcon($project['category'])) : '📁' ?> <?= e($project['name']) ?><?php if ($project['category']): ?> <span class="badge badge--role"><?= e($project['category']) ?></span><?php endif; ?><?php if ($project['type']): ?> <span class="badge badge--role"><?= e(projectTypeIcon($project['type'])) ?> <?= e($project['type']) ?></span><?php endif; ?><?php if ($project['role']): ?> <span class="badge badge--role">🎯 <?= e($project['role']) ?></span><?php endif; ?></h2>
             <?php if ($project['description']): ?>
                 <p class="muted" style="margin:4px 0 0"><?= e($project['description']) ?></p>
             <?php endif; ?>
@@ -408,7 +438,7 @@ require __DIR__ . '/../includes/header.php';
 </div>
 
 <?php
-$managers = array_values(array_filter($members, static fn ($m) => $m['project_role'] === 'manager'));
+$managers = $projectManagers;
 $testerMembersOnly = array_values(array_filter($members, static fn ($m) => $m['project_role'] === 'tester'));
 
 function renderMemberGrid(array $group, int $projectId, bool $canManageTasks): void
@@ -622,17 +652,27 @@ function renderMemberGrid(array $group, int $projectId, bool $canManageTasks): v
     <div class="card__header">
         <h2 class="card__title">Project Discussion</h2>
     </div>
-    <p class="muted" style="margin-top:-8px">Post updates, findings, or reviews here -- visible to everyone on this project's team.</p>
+    <p class="muted" style="margin-top:-8px">
+        Post updates, findings, or reviews here -- visible to everyone on this project's team.
+        <?php if ($projectManagers): ?>
+            <br>Mentor<?= count($projectManagers) === 1 ? '' : 's' ?>: <strong><?= e(implode(', ', array_map(static fn ($m) => $m['full_name'] ?: $m['username'], $projectManagers))) ?></strong>
+        <?php endif; ?>
+    </p>
 
     <div class="discussion-feed" id="discussion-feed"><?= renderProjectComments($comments) ?></div>
 
-    <form method="post" action="view.php?id=<?= $id ?>#discussion" style="margin-top:14px">
+    <form method="post" action="view.php?id=<?= $id ?>#discussion" class="chat-composer" id="discussion-form" enctype="multipart/form-data">
         <?= csrf_field() ?>
         <input type="hidden" name="do" value="post_comment">
-        <div class="form-group">
-            <textarea name="body" rows="3" placeholder="Write an update or review…" required></textarea>
+        <button type="button" class="btn chat-composer__attach" id="discussion-attach-btn" title="Attach image">📎</button>
+        <input type="file" name="attachment" id="discussion-attachment" accept="image/jpeg,image/png,image/gif,image/webp" hidden>
+        <textarea name="body" id="discussion-body" rows="1" placeholder="Write an update or review… (Enter to send, Shift+Enter for a new line, or paste an image)"></textarea>
+        <button type="submit" class="btn btn--primary chat-composer__send" title="Send">➤</button>
+        <div class="chat-composer__preview" id="discussion-preview">
+            <img id="discussion-preview-img" alt="">
+            <span class="chat-composer__preview-name" id="discussion-preview-name"></span>
+            <button type="button" class="chat-composer__preview-remove" id="discussion-preview-remove" title="Remove">✕</button>
         </div>
-        <button type="submit" class="btn btn--primary btn--small">Post</button>
     </form>
 </div>
 
@@ -651,6 +691,68 @@ function renderMemberGrid(array $group, int $projectId, bool $canManageTasks): v
                     if (wasAtBottom) { feed.scrollTop = feed.scrollHeight; }
                 });
         }, 8000);
+
+        var textarea = document.getElementById('discussion-body');
+        var form = document.getElementById('discussion-form');
+        var fileInput = document.getElementById('discussion-attachment');
+        var attachBtn = document.getElementById('discussion-attach-btn');
+        var preview = document.getElementById('discussion-preview');
+        var previewImg = document.getElementById('discussion-preview-img');
+        var previewName = document.getElementById('discussion-preview-name');
+        var previewRemove = document.getElementById('discussion-preview-remove');
+
+        var showPreview = function (file) {
+            previewImg.src = URL.createObjectURL(file);
+            previewName.textContent = file.name || 'Pasted image';
+            preview.classList.add('is-active');
+        };
+        var clearPreview = function () {
+            fileInput.value = '';
+            previewImg.src = '';
+            preview.classList.remove('is-active');
+        };
+        var hasAttachment = function () {
+            return fileInput.files && fileInput.files.length > 0;
+        };
+
+        if (attachBtn && fileInput) {
+            attachBtn.addEventListener('click', function () { fileInput.click(); });
+            fileInput.addEventListener('change', function () {
+                if (fileInput.files[0]) { showPreview(fileInput.files[0]); } else { clearPreview(); }
+            });
+        }
+        if (previewRemove) {
+            previewRemove.addEventListener('click', clearPreview);
+        }
+
+        if (textarea && form) {
+            var grow = function () {
+                textarea.style.height = 'auto';
+                textarea.style.height = Math.min(textarea.scrollHeight, 140) + 'px';
+            };
+            textarea.addEventListener('input', grow);
+            textarea.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (textarea.value.trim() !== '' || hasAttachment()) { form.submit(); }
+                }
+            });
+            textarea.addEventListener('paste', function (e) {
+                var items = (e.clipboardData || window.clipboardData).items || [];
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i].kind === 'file' && items[i].type.indexOf('image/') === 0) {
+                        var file = items[i].getAsFile();
+                        var dt = new DataTransfer();
+                        dt.items.add(file);
+                        fileInput.files = dt.files;
+                        showPreview(file);
+                        e.preventDefault();
+                        break;
+                    }
+                }
+            });
+            grow();
+        }
     })();
 </script>
 

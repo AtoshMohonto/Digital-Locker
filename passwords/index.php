@@ -1,6 +1,6 @@
 <?php
 /**
- * Passwords list, filterable and groupable by project, category, and access role.
+ * Passwords list, filterable and groupable by project, category, type, and access role.
  */
 require_once __DIR__ . '/../includes/init.php';
 requirePermission('passwords.view');
@@ -8,23 +8,28 @@ requirePermission('passwords.view');
 $pageTitle = 'Credential Vault';
 $activePage = 'passwords';
 
-$roles    = $db->query('SELECT id, name FROM roles ORDER BY name')->fetchAll();
-$projects = $db->query('SELECT id, name FROM projects ORDER BY name')->fetchAll();
+$roles = $db->query('SELECT id, name FROM roles ORDER BY name')->fetchAll();
+// A Manager/Tester only ever sees their own assigned projects here -- same
+// scoping as the Projects page -- so the filter dropdown can't be used to
+// discover projects they're not on either.
+$projects = myAccessibleProjects();
 
 $filterRole     = isset($_GET['role']) ? (int) $_GET['role'] : 0;
 $filterProject  = isset($_GET['project']) ? (int) $_GET['project'] : 0;
 $filterCategory = trim($_GET['category'] ?? '');
 $filterType     = trim($_GET['type'] ?? '');
 $filterSearch   = trim($_GET['q'] ?? '');
-$groupBy      = in_array($_GET['group'] ?? '', ['project', 'category', 'role'], true) ? $_GET['group'] : '';
+$groupBy      = in_array($_GET['group'] ?? '', ['project', 'category', 'type', 'role', 'date'], true) ? $_GET['group'] : '';
 $viewMode     = ($_GET['view'] ?? '') === 'grid' ? 'grid' : 'table';
 $gridUrl      = 'index.php?' . http_build_query(array_merge($_GET, ['view' => 'grid']));
 $tableUrl     = 'index.php?' . http_build_query(array_merge($_GET, ['view' => 'table']));
-// One-click toggle, same idea as the Projects page's role accordion: click to
-// group by category, click again to go back to a flat list.
+// One-click toggles, same idea as the Projects page's role accordion: click to
+// group by category/type/date, click again to go back to a flat list.
 $categoryToggleUrl = 'index.php?' . http_build_query(array_merge($_GET, ['group' => $groupBy === 'category' ? '' : 'category']));
+$typeToggleUrl     = 'index.php?' . http_build_query(array_merge($_GET, ['group' => $groupBy === 'type' ? '' : 'type']));
+$dateToggleUrl     = 'index.php?' . http_build_query(array_merge($_GET, ['group' => $groupBy === 'date' ? '' : 'date']));
 
-$sql = 'SELECT p.id, p.title, p.category, p.username, p.email, p.url, p.updated_at,
+$sql = 'SELECT p.id, p.title, p.category, p.username, p.email, p.url, p.updated_at, p.created_at,
                p.project_id, p.assigned_to, pr_j.name AS project_name,
                u.username AS assigned_username, u.full_name AS assigned_full_name,
                GROUP_CONCAT(DISTINCT r.id, ":", r.name ORDER BY r.name SEPARATOR "||") AS role_pairs
@@ -60,6 +65,16 @@ if ($filterSearch !== '') {
     $params['q1'] = $like;
     $params['q2'] = $like;
     $params['q3'] = $like;
+}
+if (!isAdministrator()) {
+    // A Manager/Tester only sees credentials belonging to a project they're
+    // a member of -- a credential with no project at all is out of scope for
+    // anyone but an Administrator, same rule as canAccessCredentialProject().
+    $sql .= ' AND p.project_id IS NOT NULL AND EXISTS (
+                  SELECT 1 FROM project_members pm3
+                   WHERE pm3.project_id = p.project_id AND pm3.user_id = :myuid
+              )';
+    $params['myuid'] = (int) currentUser()['id'];
 }
 
 $sql .= ' GROUP BY p.id ORDER BY p.title ASC';
@@ -235,11 +250,17 @@ function groupKeysFor(array $row, string $groupBy): array
         case 'category':
             $cat = $row['category'] ?: '';
             return [[$cat !== '' ? $cat : '(uncategorized)', $cat !== '' ? $cat : 'Uncategorized']];
+        case 'type':
+            $loginRole = extractLoginRole($row['title']);
+            $hasType = $loginRole !== $row['title'];
+            return [[$hasType ? $loginRole : '(no type)', $hasType ? $loginRole : 'No type set']];
         case 'role':
             if (!$row['roles']) {
                 return [[0, 'Unrestricted (no access level set)']];
             }
             return array_map(static fn ($r) => [$r['id'], accessLabel($r['name'])], $row['roles']);
+        case 'date':
+            return [[date('Y-m-d', strtotime($row['created_at'])), relativeDayLabel($row['created_at'])]];
         default:
             return [];
     }
@@ -259,12 +280,15 @@ require __DIR__ . '/../includes/header.php';
                 <a class="btn btn--small<?= $viewMode === 'grid' ? ' btn--primary' : ' btn--ghost' ?>" href="<?= e($gridUrl) ?>">▦ Grid</a>
                 <a class="btn btn--small<?= $viewMode === 'table' ? ' btn--primary' : ' btn--ghost' ?>" href="<?= e($tableUrl) ?>">☰ Table</a>
                 <a class="btn btn--small<?= $groupBy === 'category' ? ' btn--primary' : ' btn--ghost' ?>" href="<?= e($categoryToggleUrl) ?>">🏷 By Category</a>
+                <a class="btn btn--small<?= $groupBy === 'type' ? ' btn--primary' : ' btn--ghost' ?>" href="<?= e($typeToggleUrl) ?>">🎭 By Type</a>
+                <a class="btn btn--small<?= $groupBy === 'date' ? ' btn--primary' : ' btn--ghost' ?>" href="<?= e($dateToggleUrl) ?>">📅 By Date</a>
             </div>
             <?php if (hasPermission('passwords.manage')): ?>
                 <a class="btn" href="import.php">Import CSV</a>
+                <a class="btn" href="export.php">Export CSV</a>
             <?php endif; ?>
-            <a class="btn" href="export.php">Export CSV</a>
             <?php if (hasPermission('passwords.manage')): ?>
+                <a class="btn btn--ghost" href="bulk_create.php">Bulk Add</a>
                 <a class="btn btn--primary" href="create.php">+ New Credential</a>
             <?php endif; ?>
         </div>
@@ -320,7 +344,9 @@ require __DIR__ . '/../includes/header.php';
                 <option value="">Flat list</option>
                 <option value="project" <?= $groupBy === 'project' ? 'selected' : '' ?>>Project</option>
                 <option value="category" <?= $groupBy === 'category' ? 'selected' : '' ?>>Category</option>
+                <option value="type" <?= $groupBy === 'type' ? 'selected' : '' ?>>Type</option>
                 <option value="role" <?= $groupBy === 'role' ? 'selected' : '' ?>>Access level</option>
+                <option value="date" <?= $groupBy === 'date' ? 'selected' : '' ?>>Date added</option>
             </select>
         </div>
         <div class="filters__actions">
@@ -390,7 +416,11 @@ require __DIR__ . '/../includes/header.php';
                 $groups[$key]['rows'][] = $row;
             }
         }
-        uasort($groups, static fn ($a, $b) => strcasecmp($a['label'], $b['label']));
+        if ($groupBy === 'date') {
+            krsort($groups); // key = 'YYYY-MM-DD' -- newest day first, not alphabetical.
+        } else {
+            uasort($groups, static fn ($a, $b) => strcasecmp($a['label'], $b['label']));
+        }
         ?>
         <div class="group-controls">
             <?php if (count($groups) > 1): ?>

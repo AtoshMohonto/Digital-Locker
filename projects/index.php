@@ -28,7 +28,7 @@ $myUserId = (int) currentUser()['id'];
 $filterCategory = trim($_GET['category'] ?? '');
 $filterType     = trim($_GET['type'] ?? '');
 
-$sql = 'SELECT p.id, p.name, p.category, p.type, p.description,
+$sql = 'SELECT p.id, p.name, p.category, p.type, p.role, p.description, p.created_at,
                (SELECT COUNT(*) FROM passwords pw WHERE pw.project_id = p.id) AS password_count'
      . (!$isAdmin ? ', pm.project_role AS my_role' : '')
      . '   FROM projects p';
@@ -59,6 +59,99 @@ $types = projectTypeOptions();
 $viewMode = ($_GET['view'] ?? '') === 'table' ? 'table' : 'grid';
 $gridUrl  = 'index.php?' . http_build_query(array_merge($_GET, ['view' => 'grid']));
 $tableUrl = 'index.php?' . http_build_query(array_merge($_GET, ['view' => 'table']));
+$groupBy = ($_GET['group'] ?? '') === 'date' ? 'date' : '';
+$dateToggleUrl = 'index.php?' . http_build_query(array_merge($_GET, ['group' => $groupBy === 'date' ? '' : 'date']));
+
+/** Renders one project's table row -- shared between the flat table and every date group. */
+function renderProjectRow(array $p, bool $isAdmin, string $viewMode): void
+{
+    ?>
+    <tr>
+        <?php if ($isAdmin): ?><td><input type="checkbox" name="ids[]" value="<?= (int) $p['id'] ?>" class="proj-check"></td><?php endif; ?>
+        <td><strong><a href="view.php?id=<?= (int) $p['id'] ?>"><?= e($p['name']) ?></a></strong></td>
+        <td><?= $p['category'] ? e(projectCategoryIcon($p['category'])) . ' ' . e($p['category']) : '—' ?></td>
+        <td><?= $p['type'] ? e(projectTypeIcon($p['type'])) . ' ' . e($p['type']) : '—' ?></td>
+        <td><?= $p['role'] ? '🎯 ' . e($p['role']) : '—' ?></td>
+        <td><?= e($p['description'] ?: '—') ?></td>
+        <td><?= (int) $p['password_count'] ?></td>
+        <td class="table__actions">
+            <?php if ($isAdmin || ($p['my_role'] ?? null) === 'manager'): ?>
+                <a class="btn btn--small" href="edit.php?id=<?= (int) $p['id'] ?>">Edit</a>
+            <?php else: ?>
+                <a class="btn btn--small btn--ghost" href="view.php?id=<?= (int) $p['id'] ?>">View</a>
+            <?php endif; ?>
+        </td>
+    </tr>
+    <?php
+}
+
+/** Renders one project's card -- shared between the flat grid and every date group. */
+function renderProjectCard(array $p, bool $isAdmin, string $viewMode): void
+{
+    ?>
+    <div class="credential-card">
+        <div class="credential-card__header">
+            <?php if ($isAdmin): ?><input type="checkbox" name="ids[]" value="<?= (int) $p['id'] ?>" class="proj-check credential-card__mark"><?php endif; ?>
+            <span class="credential-card__icon"><?= $p['category'] ? e(projectCategoryIcon($p['category'])) : '📁' ?></span>
+            <a class="credential-card__title" href="view.php?id=<?= (int) $p['id'] ?>"><?= e($p['name']) ?></a>
+        </div>
+
+        <div class="credential-card__meta">
+            <?php if ($p['category']): ?><a class="badge badge--role" href="index.php?category=<?= urlencode($p['category']) ?>&amp;view=<?= e($viewMode) ?>"><?= e($p['category']) ?></a><?php endif; ?>
+            <?php if ($p['type']): ?><a class="badge badge--role" href="index.php?type=<?= urlencode($p['type']) ?>&amp;view=<?= e($viewMode) ?>"><?= e(projectTypeIcon($p['type'])) ?> <?= e($p['type']) ?></a><?php endif; ?>
+            <?php if ($p['role']): ?><span class="badge badge--role">🎯 <?= e($p['role']) ?></span><?php endif; ?>
+            <span class="badge badge--role"><?= (int) $p['password_count'] ?> credential<?= (int) $p['password_count'] === 1 ? '' : 's' ?></span>
+        </div>
+
+        <p class="muted" style="margin:10px 0 0"><?= e($p['description'] ?: 'No description.') ?></p>
+
+        <div class="credential-card__actions">
+            <a class="btn btn--small btn--ghost" href="view.php?id=<?= (int) $p['id'] ?>">View</a>
+            <?php if ($isAdmin || ($p['my_role'] ?? null) === 'manager'): ?>
+                <a class="btn btn--small btn--ghost" href="edit.php?id=<?= (int) $p['id'] ?>">Edit</a>
+            <?php endif; ?>
+        </div>
+    </div>
+    <?php
+}
+
+/** Renders one flat set of projects as a table or a card grid, per $viewMode. */
+function renderProjectSet(array $projects, string $viewMode, bool $isAdmin): void
+{
+    if ($viewMode === 'table') {
+        ?>
+        <div class="table-wrap">
+        <table class="table">
+            <thead>
+                <tr>
+                    <?php if ($isAdmin): ?><th style="width:36px"><input type="checkbox" class="proj-check-all-group"></th><?php endif; ?>
+                    <th>Name</th>
+                    <th>Category</th>
+                    <th>Type</th>
+                    <th>Role</th>
+                    <th>Description</th>
+                    <th>Passwords</th>
+                    <th class="table__actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($projects as $p): ?>
+                <?php renderProjectRow($p, $isAdmin, $viewMode); ?>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        </div>
+        <?php
+    } else {
+        ?>
+        <div class="credential-grid">
+            <?php foreach ($projects as $p): ?>
+                <?php renderProjectCard($p, $isAdmin, $viewMode); ?>
+            <?php endforeach; ?>
+        </div>
+        <?php
+    }
+}
 
 require __DIR__ . '/../includes/header.php';
 ?>
@@ -70,6 +163,7 @@ require __DIR__ . '/../includes/header.php';
             <div class="view-toggle">
                 <a class="btn btn--small<?= $viewMode === 'grid' ? ' btn--primary' : ' btn--ghost' ?>" href="<?= e($gridUrl) ?>">▦ Grid</a>
                 <a class="btn btn--small<?= $viewMode === 'table' ? ' btn--primary' : ' btn--ghost' ?>" href="<?= e($tableUrl) ?>">☰ Table</a>
+                <a class="btn btn--small<?= $groupBy === 'date' ? ' btn--primary' : ' btn--ghost' ?>" href="<?= e($dateToggleUrl) ?>">📅 By Date</a>
             </div>
             <?php if ($isAdmin): ?>
                 <a class="btn" href="<?= BASE_URL ?>/categories/index.php">Categories</a>
@@ -118,68 +212,35 @@ require __DIR__ . '/../includes/header.php';
             <?= csrf_field() ?>
         <?php endif; ?>
 
-        <?php if ($viewMode === 'table'): ?>
-        <div class="table-wrap">
-        <table class="table">
-            <thead>
-                <tr>
-                    <?php if ($isAdmin): ?><th style="width:36px"><input type="checkbox" id="proj-check-all"></th><?php endif; ?>
-                    <th>Name</th>
-                    <th>Category</th>
-                    <th>Type</th>
-                    <th>Description</th>
-                    <th>Passwords</th>
-                    <th class="table__actions">Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-            <?php foreach ($projects as $p): ?>
-                <tr>
-                    <?php if ($isAdmin): ?><td><input type="checkbox" name="ids[]" value="<?= (int) $p['id'] ?>" class="proj-check"></td><?php endif; ?>
-                    <td><strong><a href="view.php?id=<?= (int) $p['id'] ?>"><?= e($p['name']) ?></a></strong></td>
-                    <td><?= $p['category'] ? e(projectCategoryIcon($p['category'])) . ' ' . e($p['category']) : '—' ?></td>
-                    <td><?= $p['type'] ? e(projectTypeIcon($p['type'])) . ' ' . e($p['type']) : '—' ?></td>
-                    <td><?= e($p['description'] ?: '—') ?></td>
-                    <td><?= (int) $p['password_count'] ?></td>
-                    <td class="table__actions">
-                        <?php if ($isAdmin || ($p['my_role'] ?? null) === 'manager'): ?>
-                            <a class="btn btn--small" href="edit.php?id=<?= (int) $p['id'] ?>">Edit</a>
-                        <?php else: ?>
-                            <a class="btn btn--small btn--ghost" href="view.php?id=<?= (int) $p['id'] ?>">View</a>
-                        <?php endif; ?>
-                    </td>
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-        </div>
-        <?php else: ?>
-        <div class="credential-grid">
-            <?php foreach ($projects as $p): ?>
-                <div class="credential-card">
-                    <div class="credential-card__header">
-                        <?php if ($isAdmin): ?><input type="checkbox" name="ids[]" value="<?= (int) $p['id'] ?>" class="proj-check credential-card__mark"><?php endif; ?>
-                        <span class="credential-card__icon"><?= $p['category'] ? e(projectCategoryIcon($p['category'])) : '📁' ?></span>
-                        <a class="credential-card__title" href="view.php?id=<?= (int) $p['id'] ?>"><?= e($p['name']) ?></a>
-                    </div>
-
-                    <div class="credential-card__meta">
-                        <?php if ($p['category']): ?><a class="badge badge--role" href="index.php?category=<?= urlencode($p['category']) ?>&amp;view=<?= e($viewMode) ?>"><?= e($p['category']) ?></a><?php endif; ?>
-                        <?php if ($p['type']): ?><a class="badge badge--role" href="index.php?type=<?= urlencode($p['type']) ?>&amp;view=<?= e($viewMode) ?>"><?= e(projectTypeIcon($p['type'])) ?> <?= e($p['type']) ?></a><?php endif; ?>
-                        <span class="badge badge--role"><?= (int) $p['password_count'] ?> credential<?= (int) $p['password_count'] === 1 ? '' : 's' ?></span>
-                    </div>
-
-                    <p class="muted" style="margin:10px 0 0"><?= e($p['description'] ?: 'No description.') ?></p>
-
-                    <div class="credential-card__actions">
-                        <a class="btn btn--small btn--ghost" href="view.php?id=<?= (int) $p['id'] ?>">View</a>
-                        <?php if ($isAdmin || ($p['my_role'] ?? null) === 'manager'): ?>
-                            <a class="btn btn--small btn--ghost" href="edit.php?id=<?= (int) $p['id'] ?>">Edit</a>
-                        <?php endif; ?>
-                    </div>
+        <?php if ($groupBy === 'date'): ?>
+            <?php
+            $groups = [];
+            foreach ($projects as $p) {
+                $day = date('Y-m-d', strtotime($p['created_at']));
+                if (!isset($groups[$day])) {
+                    $groups[$day] = ['label' => relativeDayLabel($p['created_at']), 'rows' => []];
+                }
+                $groups[$day]['rows'][] = $p;
+            }
+            krsort($groups);
+            ?>
+            <?php if (count($groups) > 1): ?>
+                <div class="group-controls">
+                    <button type="button" class="btn btn--small btn--ghost" id="expand-all-btn">⊞ Expand All</button>
+                    <button type="button" class="btn btn--small btn--ghost" id="collapse-all-btn">⊟ Collapse All</button>
                 </div>
+            <?php endif; ?>
+            <?php foreach ($groups as $group): ?>
+                <details class="vault-group" open>
+                    <summary class="vault-group__summary">
+                        <span><?= e($group['label']) ?></span>
+                        <span class="badge badge--role"><?= count($group['rows']) ?></span>
+                    </summary>
+                    <?php renderProjectSet($group['rows'], $viewMode, $isAdmin); ?>
+                </details>
             <?php endforeach; ?>
-        </div>
+        <?php else: ?>
+            <?php renderProjectSet($projects, $viewMode, $isAdmin); ?>
         <?php endif; ?>
 
         <?php if ($isAdmin): ?>
@@ -194,10 +255,12 @@ require __DIR__ . '/../includes/header.php';
 <?php if ($isAdmin): ?>
 <script>
     (function () {
-        var all = document.getElementById('proj-check-all');
-        if (!all) { return; }
-        all.addEventListener('change', function () {
-            document.querySelectorAll('.proj-check').forEach(function (cb) { cb.checked = all.checked; });
+        // One or more "select all" checkboxes (one per table when grouped by
+        // date) -- any of them toggles every project checkbox on the page.
+        document.querySelectorAll('.proj-check-all-group').forEach(function (all) {
+            all.addEventListener('change', function () {
+                document.querySelectorAll('.proj-check').forEach(function (cb) { cb.checked = all.checked; });
+            });
         });
     })();
 </script>

@@ -1,19 +1,24 @@
 <?php
 /**
- * Project categories & types: create new ones, and mark + delete ones you no
- * longer need. Administrator only -- these are catalogue-level lists, like
- * Roles. Deleting an entry only removes it from its picker; projects that
- * already used it keep that text value (it just won't be offered going
- * forward). Categories and Types are two independent classifications a
- * project can carry at once (e.g. Category "Client", Type "Web App").
+ * Project Categories & Types: three independent catalogues (Project
+ * Categories, Project Types, and Credential Types) managed from one page.
+ * Everyone can view it; an Administrator or Manager can add/edit entries;
+ * only an Administrator can delete one. Deleting an entry only removes it
+ * from its picker -- anything already using it keeps that text value, it
+ * just won't be offered going forward.
  */
 require_once __DIR__ . '/../includes/init.php';
-requirePermission('projects.manage');
+requireLogin();
 
-if (!isAdministrator()) {
-    require __DIR__ . '/../403.php';
-    exit;
+$isAdmin = isAdministrator();
+$canManage = false;
+foreach (userRoleNames() as $role) {
+    if ($role['name'] === 'Manager') {
+        $canManage = true;
+        break;
+    }
 }
+$canManage = $canManage || $isAdmin;
 
 $pageTitle = 'Project Categories & Types';
 $activePage = 'categories';
@@ -59,11 +64,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $do = $_POST['do'] ?? '';
+    $mutations = ['create_category', 'edit_category', 'create_type', 'edit_type', 'create_credtype', 'edit_credtype'];
+    $deletions = ['delete_selected_categories', 'delete_selected_types', 'delete_selected_credtypes'];
+
+    if (in_array($do, $mutations, true) && !$canManage) {
+        require __DIR__ . '/../403.php';
+        exit;
+    }
+    if (in_array($do, $deletions, true) && !$isAdmin) {
+        require __DIR__ . '/../403.php';
+        exit;
+    }
 
     if ($do === 'create_category') {
         $name = trim($_POST['name'] ?? '');
         [$icon, $uploadError] = handleIconUpload('categories', trim($_POST['icon'] ?? ''), '📁');
-
         if ($uploadError) {
             flash('error', $uploadError);
         } elseif ($name === '') {
@@ -73,6 +88,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $db->prepare('INSERT INTO project_categories (name, icon) VALUES (:name, :icon)')
                     ->execute(['name' => $name, 'icon' => $icon]);
                 flash('success', 'Category created.');
+            } catch (PDOException $e) {
+                flash('error', 'A category with that name already exists.');
+            }
+        }
+        redirect(BASE_URL . '/categories/index.php');
+    }
+
+    if ($do === 'edit_category') {
+        $id = (int) ($_POST['id'] ?? 0);
+        $name = trim($_POST['name'] ?? '');
+        [$icon, $uploadError] = handleIconUpload('categories', trim($_POST['icon'] ?? ''), '📁');
+        if ($uploadError) {
+            flash('error', $uploadError);
+        } elseif ($name === '') {
+            flash('error', 'Category name is required.');
+        } else {
+            try {
+                $db->prepare('UPDATE project_categories SET name = :name, icon = :icon WHERE id = :id')
+                    ->execute(['name' => $name, 'icon' => $icon, 'id' => $id]);
+                flash('success', 'Category updated.');
             } catch (PDOException $e) {
                 flash('error', 'A category with that name already exists.');
             }
@@ -95,7 +130,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($do === 'create_type') {
         $name = trim($_POST['name'] ?? '');
         [$icon, $uploadError] = handleIconUpload('types', trim($_POST['icon'] ?? ''), '🏷️');
-
         if ($uploadError) {
             flash('error', $uploadError);
         } elseif ($name === '') {
@@ -112,12 +146,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect(BASE_URL . '/categories/index.php');
     }
 
+    if ($do === 'edit_type') {
+        $id = (int) ($_POST['id'] ?? 0);
+        $name = trim($_POST['name'] ?? '');
+        [$icon, $uploadError] = handleIconUpload('types', trim($_POST['icon'] ?? ''), '🏷️');
+        if ($uploadError) {
+            flash('error', $uploadError);
+        } elseif ($name === '') {
+            flash('error', 'Type name is required.');
+        } else {
+            try {
+                $db->prepare('UPDATE project_types SET name = :name, icon = :icon WHERE id = :id')
+                    ->execute(['name' => $name, 'icon' => $icon, 'id' => $id]);
+                flash('success', 'Type updated.');
+            } catch (PDOException $e) {
+                flash('error', 'A type with that name already exists.');
+            }
+        }
+        redirect(BASE_URL . '/categories/index.php');
+    }
+
     if ($do === 'delete_selected_types') {
         $ids = array_map('intval', $_POST['ids'] ?? []);
         if ($ids) {
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
             $db->prepare("DELETE FROM project_types WHERE id IN ($placeholders)")->execute($ids);
             flash('success', count($ids) . ' type' . (count($ids) === 1 ? '' : 's') . ' deleted.');
+        } else {
+            flash('error', 'Nothing selected.');
+        }
+        redirect(BASE_URL . '/categories/index.php');
+    }
+
+    if ($do === 'create_credtype') {
+        $name = trim($_POST['name'] ?? '');
+        if ($name === '') {
+            flash('error', 'Type name is required.');
+        } else {
+            try {
+                $db->prepare('INSERT INTO credential_types (name) VALUES (:name)')->execute(['name' => $name]);
+                flash('success', 'Credential type created.');
+            } catch (PDOException $e) {
+                flash('error', 'A credential type with that name already exists.');
+            }
+        }
+        redirect(BASE_URL . '/categories/index.php');
+    }
+
+    if ($do === 'edit_credtype') {
+        $id = (int) ($_POST['id'] ?? 0);
+        $name = trim($_POST['name'] ?? '');
+        if ($name === '') {
+            flash('error', 'Type name is required.');
+        } else {
+            try {
+                $db->prepare('UPDATE credential_types SET name = :name WHERE id = :id')->execute(['name' => $name, 'id' => $id]);
+                flash('success', 'Credential type updated.');
+            } catch (PDOException $e) {
+                flash('error', 'A credential type with that name already exists.');
+            }
+        }
+        redirect(BASE_URL . '/categories/index.php');
+    }
+
+    if ($do === 'delete_selected_credtypes') {
+        $ids = array_map('intval', $_POST['ids'] ?? []);
+        if ($ids) {
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $db->prepare("DELETE FROM credential_types WHERE id IN ($placeholders)")->execute($ids);
+            flash('success', count($ids) . ' credential type' . (count($ids) === 1 ? '' : 's') . ' deleted.');
         } else {
             flash('error', 'Nothing selected.');
         }
@@ -151,142 +248,298 @@ $types = $db->query(
       ORDER BY pt.name"
 )->fetchAll();
 
+$credTypes = $db->query(
+    "SELECT ct.id, ct.name,
+            (SELECT COUNT(*) FROM passwords p WHERE p.title LIKE CONCAT(ct.name, ' — %')) AS credential_count
+       FROM credential_types ct
+      ORDER BY ct.name"
+)->fetchAll();
+
+$editCategoryId = isset($_GET['edit_category']) ? (int) $_GET['edit_category'] : 0;
+$editTypeId = isset($_GET['edit_type']) ? (int) $_GET['edit_type'] : 0;
+$editCredTypeId = isset($_GET['edit_credtype']) ? (int) $_GET['edit_credtype'] : 0;
+
+$editCategory = null;
+foreach ($categories as $c) {
+    if ((int) $c['id'] === $editCategoryId) {
+        $editCategory = $c;
+        break;
+    }
+}
+$editType = null;
+foreach ($types as $t) {
+    if ((int) $t['id'] === $editTypeId) {
+        $editType = $t;
+        break;
+    }
+}
+$editCredType = null;
+foreach ($credTypes as $ct) {
+    if ((int) $ct['id'] === $editCredTypeId) {
+        $editCredType = $ct;
+        break;
+    }
+}
+
 require __DIR__ . '/../includes/header.php';
 ?>
 
-<div class="card">
-    <div class="card__header card__header--stack">
-        <div>
-            <h2 class="card__title">Project Categories</h2>
-            <p class="muted" style="margin:4px 0 0">Mark and delete categories you don't need, or add new ones below.</p>
-        </div>
-        <a class="btn btn--small" href="<?= BASE_URL ?>/projects/index.php">&larr; Projects</a>
+<details class="vault-group" open>
+    <summary class="vault-group__summary">
+        <span class="card__title">Project Categories</span>
+    </summary>
+    <div style="padding:16px 20px">
+        <p class="muted" style="margin:0 0 12px">Mark and delete categories you don't need, or add new ones below.</p>
+
+        <?php if ($categories): ?>
+            <form method="post" action="index.php" onsubmit="return confirm('Delete the selected categories? Projects already using them keep their label, but it won\'t be offered going forward.');">
+                <?= csrf_field() ?>
+                <input type="hidden" name="do" value="delete_selected_categories">
+                <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <?php if ($isAdmin): ?><th style="width:36px"><input type="checkbox" id="cat-check-all"></th><?php endif; ?>
+                            <th>Category</th>
+                            <th>Projects</th>
+                            <th>Managers</th>
+                            <th>Testers</th>
+                            <?php if ($canManage): ?><th class="table__actions">Actions</th><?php endif; ?>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($categories as $c): ?>
+                        <tr>
+                            <?php if ($isAdmin): ?><td><input type="checkbox" name="ids[]" value="<?= (int) $c['id'] ?>" class="cat-check"></td><?php endif; ?>
+                            <td><?= projectCategoryIconHtml($c['name']) ?> <?= e($c['name']) ?></td>
+                            <td><a href="<?= BASE_URL ?>/projects/index.php?category=<?= urlencode($c['name']) ?>"><?= (int) $c['project_count'] ?> project<?= (int) $c['project_count'] === 1 ? '' : 's' ?></a></td>
+                            <td><?= (int) $c['manager_count'] ?> running</td>
+                            <td><?= (int) $c['tester_count'] ?> running</td>
+                            <?php if ($canManage): ?>
+                                <td class="table__actions"><a class="btn btn--small btn--ghost" href="index.php?edit_category=<?= (int) $c['id'] ?>#edit-category">✏️ Edit</a></td>
+                            <?php endif; ?>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <?php if ($isAdmin): ?>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn--danger btn--small">Delete selected</button>
+                    </div>
+                <?php endif; ?>
+            </form>
+        <?php else: ?>
+            <p class="muted">No categories yet.</p>
+        <?php endif; ?>
+
+        <?php if ($canManage): ?>
+            <?php if ($editCategory): ?>
+                <form method="post" action="index.php" enctype="multipart/form-data" id="edit-category" style="margin-top:18px;padding-top:18px;border-top:1px solid var(--border)">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="do" value="edit_category">
+                    <input type="hidden" name="id" value="<?= (int) $editCategory['id'] ?>">
+                    <p class="muted" style="margin:0 0 8px">Editing "<?= e($editCategory['name']) ?>"</p>
+                    <div class="form-inline-row">
+                        <input type="text" name="icon" value="<?= e(strpos($editCategory['icon'], '/') === false ? $editCategory['icon'] : '') ?>" placeholder="📁" maxlength="8" style="width:70px;flex:none;text-align:center">
+                        <input type="text" name="name" value="<?= e($editCategory['name']) ?>" required style="flex:2">
+                        <button type="submit" class="btn btn--small btn--primary">Save changes</button>
+                        <a class="btn btn--small btn--ghost" href="index.php">Cancel</a>
+                    </div>
+                    <div class="form-group" style="margin-top:10px;margin-bottom:0">
+                        <label class="muted" style="font-weight:400">Or upload a new icon image <span class="muted">(replaces the current one)</span></label>
+                        <input type="file" name="icon_file" accept="image/png,image/jpeg,image/gif,image/webp,image/x-icon,.ico">
+                    </div>
+                </form>
+            <?php else: ?>
+                <form method="post" action="index.php" enctype="multipart/form-data" style="margin-top:18px;padding-top:18px;border-top:1px solid var(--border)">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="do" value="create_category">
+                    <div class="form-inline-row">
+                        <input type="text" name="icon" placeholder="📁" maxlength="8" style="width:70px;flex:none;text-align:center">
+                        <input type="text" name="name" placeholder="New category name…" required style="flex:2">
+                        <button type="submit" class="btn btn--small btn--primary">+ Add category</button>
+                    </div>
+                    <div class="form-group" style="margin-top:10px;margin-bottom:0">
+                        <label class="muted" style="font-weight:400">Or upload an icon image <span class="muted">(favicon, JPG, PNG, GIF, or WEBP -- max 512KB; overrides the emoji above)</span></label>
+                        <input type="file" name="icon_file" accept="image/png,image/jpeg,image/gif,image/webp,image/x-icon,.ico">
+                    </div>
+                </form>
+            <?php endif; ?>
+        <?php endif; ?>
     </div>
+</details>
 
-    <?php if ($categories): ?>
-        <form method="post" action="index.php" onsubmit="return confirm('Delete the selected categories? Projects already using them keep their label, but it won\'t be offered going forward.');">
-            <?= csrf_field() ?>
-            <input type="hidden" name="do" value="delete_selected_categories">
-            <div class="table-wrap">
-            <table class="table">
-                <thead>
-                    <tr>
-                        <th style="width:36px"><input type="checkbox" id="cat-check-all"></th>
-                        <th>Category</th>
-                        <th>Projects</th>
-                        <th>Managers</th>
-                        <th>Testers</th>
-                    </tr>
-                </thead>
-                <tbody>
-                <?php foreach ($categories as $c): ?>
-                    <tr>
-                        <td><input type="checkbox" name="ids[]" value="<?= (int) $c['id'] ?>" class="cat-check"></td>
-                        <td><?= projectCategoryIconHtml($c['name']) ?> <?= e($c['name']) ?></td>
-                        <td><a href="<?= BASE_URL ?>/projects/index.php?category=<?= urlencode($c['name']) ?>"><?= (int) $c['project_count'] ?> project<?= (int) $c['project_count'] === 1 ? '' : 's' ?></a></td>
-                        <td><?= (int) $c['manager_count'] ?> running</td>
-                        <td><?= (int) $c['tester_count'] ?> running</td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table>
-            </div>
-            <div class="form-actions">
-                <button type="submit" class="btn btn--danger btn--small">Delete selected</button>
-            </div>
-        </form>
-    <?php else: ?>
-        <p class="muted">No categories yet.</p>
-    <?php endif; ?>
+<details class="vault-group" open>
+    <summary class="vault-group__summary">
+        <span class="card__title">Project Types</span>
+    </summary>
+    <div style="padding:16px 20px">
+        <p class="muted" style="margin:0 0 12px">A second, independent classification (e.g. Web App, Mobile App) -- pick both a Category and a Type on a project.</p>
 
-    <form method="post" action="index.php" enctype="multipart/form-data" style="margin-top:18px;padding-top:18px;border-top:1px solid var(--border)">
-        <?= csrf_field() ?>
-        <input type="hidden" name="do" value="create_category">
-        <div class="form-inline-row">
-            <input type="text" name="icon" placeholder="📁" maxlength="8" style="width:70px;flex:none;text-align:center">
-            <input type="text" name="name" placeholder="New category name…" required style="flex:2">
-            <button type="submit" class="btn btn--small btn--primary">+ Add category</button>
-        </div>
-        <div class="form-group" style="margin-top:10px;margin-bottom:0">
-            <label for="cat_icon_file" class="muted" style="font-weight:400">Or upload an icon image <span class="muted">(favicon, JPG, PNG, GIF, or WEBP -- max 512KB; overrides the emoji above)</span></label>
-            <input type="file" id="cat_icon_file" name="icon_file" accept="image/png,image/jpeg,image/gif,image/webp,image/x-icon,.ico">
-        </div>
-    </form>
-</div>
+        <?php if ($types): ?>
+            <form method="post" action="index.php" onsubmit="return confirm('Delete the selected types? Projects already using them keep their label, but it won\'t be offered going forward.');">
+                <?= csrf_field() ?>
+                <input type="hidden" name="do" value="delete_selected_types">
+                <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <?php if ($isAdmin): ?><th style="width:36px"><input type="checkbox" id="type-check-all"></th><?php endif; ?>
+                            <th>Type</th>
+                            <th>Projects</th>
+                            <th>Managers</th>
+                            <th>Testers</th>
+                            <?php if ($canManage): ?><th class="table__actions">Actions</th><?php endif; ?>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($types as $t): ?>
+                        <tr>
+                            <?php if ($isAdmin): ?><td><input type="checkbox" name="ids[]" value="<?= (int) $t['id'] ?>" class="type-check"></td><?php endif; ?>
+                            <td><?= projectTypeIconHtml($t['name']) ?> <?= e($t['name']) ?></td>
+                            <td><a href="<?= BASE_URL ?>/projects/index.php?type=<?= urlencode($t['name']) ?>"><?= (int) $t['project_count'] ?> project<?= (int) $t['project_count'] === 1 ? '' : 's' ?></a></td>
+                            <td><?= (int) $t['manager_count'] ?> running</td>
+                            <td><?= (int) $t['tester_count'] ?> running</td>
+                            <?php if ($canManage): ?>
+                                <td class="table__actions"><a class="btn btn--small btn--ghost" href="index.php?edit_type=<?= (int) $t['id'] ?>#edit-type">✏️ Edit</a></td>
+                            <?php endif; ?>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <?php if ($isAdmin): ?>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn--danger btn--small">Delete selected</button>
+                    </div>
+                <?php endif; ?>
+            </form>
+        <?php else: ?>
+            <p class="muted">No types yet.</p>
+        <?php endif; ?>
 
-<div class="card">
-    <div class="card__header card__header--stack">
-        <div>
-            <h2 class="card__title">Project Types</h2>
-            <p class="muted" style="margin:4px 0 0">A second, independent classification (e.g. Web App, Mobile App) -- pick both a Category and a Type on a project.</p>
-        </div>
+        <?php if ($canManage): ?>
+            <?php if ($editType): ?>
+                <form method="post" action="index.php" enctype="multipart/form-data" id="edit-type" style="margin-top:18px;padding-top:18px;border-top:1px solid var(--border)">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="do" value="edit_type">
+                    <input type="hidden" name="id" value="<?= (int) $editType['id'] ?>">
+                    <p class="muted" style="margin:0 0 8px">Editing "<?= e($editType['name']) ?>"</p>
+                    <div class="form-inline-row">
+                        <input type="text" name="icon" value="<?= e(strpos($editType['icon'], '/') === false ? $editType['icon'] : '') ?>" placeholder="🏷️" maxlength="8" style="width:70px;flex:none;text-align:center">
+                        <input type="text" name="name" value="<?= e($editType['name']) ?>" required style="flex:2">
+                        <button type="submit" class="btn btn--small btn--primary">Save changes</button>
+                        <a class="btn btn--small btn--ghost" href="index.php">Cancel</a>
+                    </div>
+                    <div class="form-group" style="margin-top:10px;margin-bottom:0">
+                        <label class="muted" style="font-weight:400">Or upload a new icon image <span class="muted">(replaces the current one)</span></label>
+                        <input type="file" name="icon_file" accept="image/png,image/jpeg,image/gif,image/webp,image/x-icon,.ico">
+                    </div>
+                </form>
+            <?php else: ?>
+                <form method="post" action="index.php" enctype="multipart/form-data" style="margin-top:18px;padding-top:18px;border-top:1px solid var(--border)">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="do" value="create_type">
+                    <div class="form-inline-row">
+                        <input type="text" name="icon" placeholder="🏷️" maxlength="8" style="width:70px;flex:none;text-align:center">
+                        <input type="text" name="name" placeholder="New type name…" required style="flex:2">
+                        <button type="submit" class="btn btn--small btn--primary">+ Add type</button>
+                    </div>
+                    <div class="form-group" style="margin-top:10px;margin-bottom:0">
+                        <label class="muted" style="font-weight:400">Or upload an icon image <span class="muted">(favicon, JPG, PNG, GIF, or WEBP -- max 512KB; overrides the emoji above)</span></label>
+                        <input type="file" name="icon_file" accept="image/png,image/jpeg,image/gif,image/webp,image/x-icon,.ico">
+                    </div>
+                </form>
+            <?php endif; ?>
+        <?php endif; ?>
     </div>
+</details>
 
-    <?php if ($types): ?>
-        <form method="post" action="index.php" onsubmit="return confirm('Delete the selected types? Projects already using them keep their label, but it won\'t be offered going forward.');">
-            <?= csrf_field() ?>
-            <input type="hidden" name="do" value="delete_selected_types">
-            <div class="table-wrap">
-            <table class="table">
-                <thead>
-                    <tr>
-                        <th style="width:36px"><input type="checkbox" id="type-check-all"></th>
-                        <th>Type</th>
-                        <th>Projects</th>
-                        <th>Managers</th>
-                        <th>Testers</th>
-                    </tr>
-                </thead>
-                <tbody>
-                <?php foreach ($types as $t): ?>
-                    <tr>
-                        <td><input type="checkbox" name="ids[]" value="<?= (int) $t['id'] ?>" class="type-check"></td>
-                        <td><?= projectTypeIconHtml($t['name']) ?> <?= e($t['name']) ?></td>
-                        <td><a href="<?= BASE_URL ?>/projects/index.php?type=<?= urlencode($t['name']) ?>"><?= (int) $t['project_count'] ?> project<?= (int) $t['project_count'] === 1 ? '' : 's' ?></a></td>
-                        <td><?= (int) $t['manager_count'] ?> running</td>
-                        <td><?= (int) $t['tester_count'] ?> running</td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table>
-            </div>
-            <div class="form-actions">
-                <button type="submit" class="btn btn--danger btn--small">Delete selected</button>
-            </div>
-        </form>
-    <?php else: ?>
-        <p class="muted">No types yet.</p>
-    <?php endif; ?>
+<details class="vault-group" open>
+    <summary class="vault-group__summary">
+        <span class="card__title">Credential Types</span>
+    </summary>
+    <div style="padding:16px 20px">
+        <p class="muted" style="margin:0 0 12px">The "Type" on a credential (e.g. Admin, Manager, Teacher). Typing a brand-new one on the New Credential form adds it here automatically.</p>
 
-    <form method="post" action="index.php" enctype="multipart/form-data" style="margin-top:18px;padding-top:18px;border-top:1px solid var(--border)">
-        <?= csrf_field() ?>
-        <input type="hidden" name="do" value="create_type">
-        <div class="form-inline-row">
-            <input type="text" name="icon" placeholder="🏷️" maxlength="8" style="width:70px;flex:none;text-align:center">
-            <input type="text" name="name" placeholder="New type name…" required style="flex:2">
-            <button type="submit" class="btn btn--small btn--primary">+ Add type</button>
-        </div>
-        <div class="form-group" style="margin-top:10px;margin-bottom:0">
-            <label for="type_icon_file" class="muted" style="font-weight:400">Or upload an icon image <span class="muted">(favicon, JPG, PNG, GIF, or WEBP -- max 512KB; overrides the emoji above)</span></label>
-            <input type="file" id="type_icon_file" name="icon_file" accept="image/png,image/jpeg,image/gif,image/webp,image/x-icon,.ico">
-        </div>
-    </form>
-</div>
+        <?php if ($credTypes): ?>
+            <form method="post" action="index.php" onsubmit="return confirm('Delete the selected credential types? Credentials already using them keep their label, but it won\'t be offered going forward.');">
+                <?= csrf_field() ?>
+                <input type="hidden" name="do" value="delete_selected_credtypes">
+                <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <?php if ($isAdmin): ?><th style="width:36px"><input type="checkbox" id="credtype-check-all"></th><?php endif; ?>
+                            <th>Type</th>
+                            <th>Credentials</th>
+                            <?php if ($canManage): ?><th class="table__actions">Actions</th><?php endif; ?>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($credTypes as $ct): ?>
+                        <tr>
+                            <?php if ($isAdmin): ?><td><input type="checkbox" name="ids[]" value="<?= (int) $ct['id'] ?>" class="credtype-check"></td><?php endif; ?>
+                            <td><?= e($ct['name']) ?></td>
+                            <td><a href="<?= BASE_URL ?>/passwords/index.php?type=<?= urlencode($ct['name']) ?>"><?= (int) $ct['credential_count'] ?> credential<?= (int) $ct['credential_count'] === 1 ? '' : 's' ?></a></td>
+                            <?php if ($canManage): ?>
+                                <td class="table__actions"><a class="btn btn--small btn--ghost" href="index.php?edit_credtype=<?= (int) $ct['id'] ?>#edit-credtype">✏️ Edit</a></td>
+                            <?php endif; ?>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <?php if ($isAdmin): ?>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn--danger btn--small">Delete selected</button>
+                    </div>
+                <?php endif; ?>
+            </form>
+        <?php else: ?>
+            <p class="muted">No credential types yet.</p>
+        <?php endif; ?>
+
+        <?php if ($canManage): ?>
+            <?php if ($editCredType): ?>
+                <form method="post" action="index.php" id="edit-credtype" style="margin-top:18px;padding-top:18px;border-top:1px solid var(--border)">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="do" value="edit_credtype">
+                    <input type="hidden" name="id" value="<?= (int) $editCredType['id'] ?>">
+                    <p class="muted" style="margin:0 0 8px">Editing "<?= e($editCredType['name']) ?>"</p>
+                    <div class="form-inline-row">
+                        <input type="text" name="name" value="<?= e($editCredType['name']) ?>" required style="flex:2">
+                        <button type="submit" class="btn btn--small btn--primary">Save changes</button>
+                        <a class="btn btn--small btn--ghost" href="index.php">Cancel</a>
+                    </div>
+                </form>
+            <?php else: ?>
+                <form method="post" action="index.php" style="margin-top:18px;padding-top:18px;border-top:1px solid var(--border)">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="do" value="create_credtype">
+                    <div class="form-inline-row">
+                        <input type="text" name="name" placeholder="New credential type name…" required style="flex:2">
+                        <button type="submit" class="btn btn--small btn--primary">+ Add credential type</button>
+                    </div>
+                </form>
+            <?php endif; ?>
+        <?php endif; ?>
+    </div>
+</details>
 
 <script>
     (function () {
-        var catAll = document.getElementById('cat-check-all');
-        if (catAll) {
-            catAll.addEventListener('change', function () {
-                document.querySelectorAll('.cat-check').forEach(function (cb) { cb.checked = catAll.checked; });
+        function wireCheckAll(allId, cls) {
+            var all = document.getElementById(allId);
+            if (!all) { return; }
+            all.addEventListener('change', function () {
+                document.querySelectorAll(cls).forEach(function (cb) { cb.checked = all.checked; });
             });
         }
-        var typeAll = document.getElementById('type-check-all');
-        if (typeAll) {
-            typeAll.addEventListener('change', function () {
-                document.querySelectorAll('.type-check').forEach(function (cb) { cb.checked = typeAll.checked; });
-            });
-        }
+        wireCheckAll('cat-check-all', '.cat-check');
+        wireCheckAll('type-check-all', '.type-check');
+        wireCheckAll('credtype-check-all', '.credtype-check');
     })();
 </script>
 

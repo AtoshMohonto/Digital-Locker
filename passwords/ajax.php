@@ -25,7 +25,7 @@ if (!$row) {
     exit;
 }
 
-if (!canAccessCredential($id)) {
+if (!canAccessCredentialProject($id) || !canAccessCredential($id)) {
     logAudit('reveal_denied', $id, $row['title']);
     http_response_code(403);
     echo json_encode(['error' => 'You do not have access to this credential.']);

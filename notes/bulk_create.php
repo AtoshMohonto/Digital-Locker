@@ -12,7 +12,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf($_POST['csrf_token'] ?
 }
 
 $userId = currentUser()['id'];
-$projects = $db->query('SELECT id FROM projects')->fetchAll(PDO::FETCH_COLUMN);
+$projects = array_column(myAccessibleProjects(), 'id');
 $projectId = (int) ($_POST['project_id'] ?? 0);
 $projectId = in_array($projectId, array_map('intval', $projects), true) ? $projectId : null;
 

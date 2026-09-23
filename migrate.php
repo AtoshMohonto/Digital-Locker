@@ -370,6 +370,129 @@ if (!in_array('type', $projectColumns, true)) {
     $skipped[] = 'projects.type';
 }
 
+// Credential "Type" (e.g. Admin, Manager, Teacher -- the "Role — System Name"
+// prefix): used to be purely freeform text, derived on the fly from whatever
+// was already typed into existing titles. Now a real catalog, same pattern as
+// project_categories/project_types, so it can be managed on the Project
+// Categories & Types page and new values typed on the credential form get
+// remembered there too.
+$tables = $pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);
+if (!in_array('credential_types', $tables, true)) {
+    $pdo->exec(
+        "CREATE TABLE credential_types (
+            id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            name       VARCHAR(60) NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB"
+    );
+    // Backfill from whatever role prefixes are already in use across
+    // existing credential titles, so nothing already in play goes missing
+    // from the new catalog on the day it's introduced.
+    $seedType = $pdo->prepare('INSERT IGNORE INTO credential_types (name) VALUES (:name)');
+    foreach ($pdo->query('SELECT title FROM passwords')->fetchAll() as $row) {
+        $parts = preg_split('/\s*—\s*/u', $row['title'], 2);
+        if (count($parts) === 2 && trim($parts[0]) !== '') {
+            $seedType->execute(['name' => trim($parts[0])]);
+        }
+    }
+    $applied[] = 'credential_types (table, backfilled)';
+} else {
+    $skipped[] = 'credential_types (table)';
+}
+
+// Credential Assignments: a credential can now have several Managers and
+// several Testers at once (not just one "assigned_to"), so this replaces
+// that single column with a many-to-many table, same shape as password_roles.
+// Existing assigned_to values are carried over as the first row of whichever
+// kind matches that user's role, so nothing already assigned goes missing.
+$tables = $pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);
+if (!in_array('password_assignees', $tables, true)) {
+    $pdo->exec(
+        "CREATE TABLE password_assignees (
+            id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            password_id INT UNSIGNED NOT NULL,
+            user_id     INT UNSIGNED NOT NULL,
+            kind        ENUM('manager','tester') NOT NULL,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uniq_password_assignee (password_id, user_id, kind),
+            CONSTRAINT fk_pa_password FOREIGN KEY (password_id) REFERENCES passwords(id) ON DELETE CASCADE,
+            CONSTRAINT fk_pa_user     FOREIGN KEY (user_id)     REFERENCES users(id)     ON DELETE CASCADE
+        ) ENGINE=InnoDB"
+    );
+
+    $roleByUser = [];
+    foreach ($pdo->query(
+        'SELECT ur.user_id, r.name FROM user_roles ur JOIN roles r ON r.id = ur.role_id'
+    )->fetchAll() as $row) {
+        $roleByUser[(int) $row['user_id']][] = $row['name'];
+    }
+    $backfill = $pdo->prepare(
+        'INSERT IGNORE INTO password_assignees (password_id, user_id, kind) VALUES (:pid, :uid, :kind)'
+    );
+    foreach ($pdo->query('SELECT id, assigned_to FROM passwords WHERE assigned_to IS NOT NULL')->fetchAll() as $row) {
+        $uid = (int) $row['assigned_to'];
+        $roles = $roleByUser[$uid] ?? [];
+        $kind = in_array('Manager', $roles, true) ? 'manager' : (in_array('Tester', $roles, true) ? 'tester' : null);
+        if ($kind !== null) {
+            $backfill->execute(['pid' => (int) $row['id'], 'uid' => $uid, 'kind' => $kind]);
+        }
+    }
+    $applied[] = 'password_assignees (table, backfilled from assigned_to)';
+} else {
+    $skipped[] = 'password_assignees (table)';
+}
+
+// Project Discussion: lets a Tester attach/paste an image (their mentor --
+// the project's Manager -- can see it in the same chat) instead of only
+// plain text.
+$commentColumns = [];
+foreach ($pdo->query('SHOW COLUMNS FROM project_comments')->fetchAll() as $col) {
+    $commentColumns[] = $col['Field'];
+}
+if (!in_array('attachment_path', $commentColumns, true)) {
+    $pdo->exec('ALTER TABLE project_comments ADD COLUMN attachment_path VARCHAR(255) NULL AFTER body');
+    $applied[] = 'project_comments.attachment_path';
+} else {
+    $skipped[] = 'project_comments.attachment_path';
+}
+
+// Project "Role": the web app's functional purpose (Data Collection,
+// E-commerce, Login System, ...) -- a third classification alongside
+// Category/Type, picked (or freely typed) on the New/Edit Project form,
+// with suggestions narrowed to whatever's already used for that project's
+// Category+Type combo.
+$projectColumns = [];
+foreach ($pdo->query('SHOW COLUMNS FROM projects')->fetchAll() as $col) {
+    $projectColumns[] = $col['Field'];
+}
+if (!in_array('role', $projectColumns, true)) {
+    $pdo->exec("ALTER TABLE projects ADD COLUMN role VARCHAR(80) NOT NULL DEFAULT '' AFTER type");
+    $applied[] = 'projects.role';
+} else {
+    $skipped[] = 'projects.role';
+}
+
+$tables = $pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);
+if (!in_array('project_purposes', $tables, true)) {
+    $pdo->exec(
+        "CREATE TABLE project_purposes (
+            id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            name       VARCHAR(80) NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB"
+    );
+    $seedPurpose = $pdo->prepare('INSERT IGNORE INTO project_purposes (name) VALUES (:name)');
+    foreach ([
+        'Data Collection', 'E-commerce', 'Login System', 'Portfolio Site',
+        'Blog/CMS', 'Internal Tool', 'API/Backend Service', 'Other',
+    ] as $name) {
+        $seedPurpose->execute(['name' => $name]);
+    }
+    $applied[] = 'project_purposes (table, seeded)';
+} else {
+    $skipped[] = 'project_purposes (table)';
+}
+
 if (PHP_SAPI === 'cli') {
     echo 'Applied : ' . implode(', ', $applied ?: ['(none)']) . PHP_EOL;
     echo 'Skipped : ' . implode(', ', $skipped ?: ['(none)']) . PHP_EOL;

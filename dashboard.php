@@ -174,7 +174,7 @@ require __DIR__ . '/includes/header.php';
             <h2 class="card__title">Quick actions</h2>
         </div>
         <div class="quick-actions">
-            <?php if (hasPermission('passwords.manage')): ?>
+            <?php if (canCreateCredentials()): ?>
                 <a class="btn btn--primary" href="passwords/create.php">+ New Credential</a>
             <?php endif; ?>
             <a class="btn" href="personal/index.php">Personal Vault</a>

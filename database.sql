@@ -18,6 +18,7 @@ DROP TABLE IF EXISTS personal_notes;
 DROP TABLE IF EXISTS project_comments;
 DROP TABLE IF EXISTS project_tasks;
 DROP TABLE IF EXISTS project_members;
+DROP TABLE IF EXISTS project_roles;
 DROP TABLE IF EXISTS role_permissions;
 DROP TABLE IF EXISTS user_roles;
 DROP TABLE IF EXISTS passwords;
@@ -75,6 +76,7 @@ CREATE TABLE user_roles (
 CREATE TABLE projects (
   id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   name        VARCHAR(100) NOT NULL UNIQUE,
+  client      VARCHAR(80)  NOT NULL DEFAULT '',
   category    VARCHAR(60)  NOT NULL DEFAULT '',
   type        VARCHAR(60)  NOT NULL DEFAULT '',
   role        VARCHAR(80)  NOT NULL DEFAULT '',
@@ -88,6 +90,15 @@ CREATE TABLE projects (
 -- at read time (see projectPurposesByContext() in includes/functions.php),
 -- not stored here.
 CREATE TABLE project_purposes (
+  id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name       VARCHAR(80) NOT NULL UNIQUE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- Project "Client": who the project is being done for (e.g. a freelance
+-- client's name or company) -- same free-text-with-suggestions catalog
+-- pattern as project_purposes.
+CREATE TABLE project_clients (
   id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   name       VARCHAR(80) NOT NULL UNIQUE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -199,6 +210,20 @@ CREATE TABLE project_members (
   CONSTRAINT fk_pm_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
+-- Credential roles allowed on a project (e.g. Admin, Teacher) -- the admin/
+-- manager picks or creates them on the New/Edit Project form, and anyone
+-- adding a credential under that project may only choose from these. This is
+-- separate from Digital Locker's own Access Level roles (roles/password_roles)
+-- and from the project's internal Team (project_members manager/tester).
+CREATE TABLE project_roles (
+  id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  project_id INT UNSIGNED NOT NULL,
+  name       VARCHAR(60) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_project_role (project_id, name),
+  CONSTRAINT fk_proj_role_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
 CREATE TABLE project_tasks (
   id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   project_id   INT UNSIGNED NOT NULL,
@@ -253,6 +278,20 @@ CREATE TABLE project_types (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
+-- A project can carry more than one Type at once (e.g. a Web App that's also
+-- a Mobile App) -- the actual per-project Type assignment, checkbox-picked
+-- from the project_types catalog above (or a freshly typed one). The
+-- projects.type column is legacy/unused going forward; this table is the
+-- source of truth. Same many-to-many pattern as project_roles.
+CREATE TABLE project_type_links (
+  id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  project_id INT UNSIGNED NOT NULL,
+  type_name  VARCHAR(60) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_project_type (project_id, type_name),
+  CONSTRAINT fk_ptl_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
 -- Credential "Type" (the "Role — System Name" prefix, e.g. Admin, Teacher):
 -- same catalogue-table pattern, managed alongside project categories/types.
 CREATE TABLE credential_types (
@@ -280,6 +319,7 @@ CREATE TABLE personal_notes (
 -- ---------------------------------------------------------------------------
 -- passwords.view     - see password entries / reveal secrets
 -- passwords.manage   - create, edit and delete password entries
+-- passwords.create   - add credentials (single/bulk) only; no edit/delete
 -- projects.manage    - create projects
 -- roles.manage       - create/edit/delete roles and permissions
 -- users.manage       - create/edit/disable users and assign roles
@@ -303,7 +343,8 @@ INSERT INTO role_permissions (role_id, permission) VALUES
   (2, 'passwords.view'),   (2, 'passwords.manage'),
   (2, 'projects.manage'),
   (2, 'tasks.manage'),     (2, 'tasks.view'),
-  (3, 'passwords.view'),   (3, 'tasks.view');
+  (3, 'passwords.view'),   (3, 'tasks.view'),
+  (3, 'passwords.create');
 
 -- admin / admin123 ; manager / manager123 ; tester / viewer123
 INSERT INTO users (id, username, email, full_name, password_hash, is_active) VALUES

@@ -28,7 +28,7 @@ $myUserId = (int) currentUser()['id'];
 $filterCategory = trim($_GET['category'] ?? '');
 $filterType     = trim($_GET['type'] ?? '');
 
-$sql = 'SELECT p.id, p.name, p.category, p.type, p.role, p.description, p.created_at,
+$sql = 'SELECT p.id, p.name, p.client, p.category, p.role, p.description, p.created_at,
                (SELECT COUNT(*) FROM passwords pw WHERE pw.project_id = p.id) AS password_count'
      . (!$isAdmin ? ', pm.project_role AS my_role' : '')
      . '   FROM projects p';
@@ -45,7 +45,9 @@ if ($filterCategory === '__uncategorized__') {
     $params['category'] = $filterCategory;
 }
 if ($filterType !== '') {
-    $sql .= ' AND p.type = :type';
+    // A project can carry several Types at once -- match if the filtered
+    // Type is any one of them.
+    $sql .= ' AND EXISTS (SELECT 1 FROM project_type_links ptl WHERE ptl.project_id = p.id AND ptl.type_name = :type)';
     $params['type'] = $filterType;
 }
 $sql .= ' ORDER BY p.name';
@@ -53,6 +55,26 @@ $sql .= ' ORDER BY p.name';
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $projects = $stmt->fetchAll();
+
+// Load every listed project's Type(s) in one follow-up query (same
+// avoid-N+1 pattern as loading Credential Roles elsewhere) and attach as
+// $p['types'], plus a canonical $p['type_key'] the merged table view uses to
+// decide whether two consecutive projects' Type sets are identical.
+$projectIds = array_column($projects, 'id');
+$typesById = [];
+if ($projectIds) {
+    $placeholders = implode(',', array_fill(0, count($projectIds), '?'));
+    $typeStmt = $db->prepare("SELECT project_id, type_name FROM project_type_links WHERE project_id IN ($placeholders) ORDER BY type_name");
+    $typeStmt->execute(array_values(array_map('intval', $projectIds)));
+    foreach ($typeStmt->fetchAll() as $row) {
+        $typesById[(int) $row['project_id']][] = (string) $row['type_name'];
+    }
+}
+foreach ($projects as &$p) {
+    $p['types'] = $typesById[(int) $p['id']] ?? [];
+    $p['type_key'] = implode('|', $p['types']);
+}
+unset($p);
 
 $categories = projectCategoryOptions();
 $types = projectTypeOptions();
@@ -62,27 +84,73 @@ $tableUrl = 'index.php?' . http_build_query(array_merge($_GET, ['view' => 'table
 $groupBy = ($_GET['group'] ?? '') === 'date' ? 'date' : '';
 $dateToggleUrl = 'index.php?' . http_build_query(array_merge($_GET, ['group' => $groupBy === 'date' ? '' : 'date']));
 
-/** Renders one project's table row -- shared between the flat table and every date group. */
-function renderProjectRow(array $p, bool $isAdmin, string $viewMode): void
+/**
+ * Rowspan run lengths for a merged column: consecutive rows sharing the same
+ * value get span-merged into one cell, keyed by start index. Same pattern as
+ * the Credential Vault's System/Category columns.
+ */
+function projectColumnRuns(array $projects, string $field): array
 {
-    ?>
-    <tr>
-        <?php if ($isAdmin): ?><td><input type="checkbox" name="ids[]" value="<?= (int) $p['id'] ?>" class="proj-check"></td><?php endif; ?>
-        <td><strong><a href="view.php?id=<?= (int) $p['id'] ?>"><?= e($p['name']) ?></a></strong></td>
-        <td><?= $p['category'] ? e(projectCategoryIcon($p['category'])) . ' ' . e($p['category']) : '—' ?></td>
-        <td><?= $p['type'] ? e(projectTypeIcon($p['type'])) . ' ' . e($p['type']) : '—' ?></td>
-        <td><?= $p['role'] ? '🎯 ' . e($p['role']) : '—' ?></td>
-        <td><?= e($p['description'] ?: '—') ?></td>
-        <td><?= (int) $p['password_count'] ?></td>
-        <td class="table__actions">
-            <?php if ($isAdmin || ($p['my_role'] ?? null) === 'manager'): ?>
-                <a class="btn btn--small" href="edit.php?id=<?= (int) $p['id'] ?>">Edit</a>
-            <?php else: ?>
-                <a class="btn btn--small btn--ghost" href="view.php?id=<?= (int) $p['id'] ?>">View</a>
+    $runs = [];
+    $n = count($projects);
+    for ($i = 0; $i < $n;) {
+        $v = (string) ($projects[$i][$field] ?? '');
+        $j = $i + 1;
+        while ($j < $n && (string) ($projects[$j][$field] ?? '') === $v) { $j++; }
+        $runs[$i] = $j - $i;
+        $i = $j;
+    }
+    return $runs;
+}
+
+/**
+ * Same table as the plain rows, but with the repeated Category / Type / Role
+ * cells span-merged when several consecutive projects share a value -- the
+ * Credential Vault's merged-layout pattern applied to the Projects page.
+ */
+function renderMergedProjectTable(array $projects, bool $isAdmin): void
+{
+    $clientRuns = projectColumnRuns($projects, 'client');
+    $catRuns  = projectColumnRuns($projects, 'category');
+    $typeRuns = projectColumnRuns($projects, 'type_key');
+    $roleRuns = projectColumnRuns($projects, 'role');
+    foreach ($projects as $i => $p) {
+        ?>
+        <tr>
+            <?php if ($isAdmin): ?><td><input type="checkbox" name="ids[]" value="<?= (int) $p['id'] ?>" class="proj-check"></td><?php endif; ?>
+            <?php if (isset($clientRuns[$i])): ?>
+                <td<?= $clientRuns[$i] > 1 ? ' rowspan="' . $clientRuns[$i] . '"' : '' ?>><?= $p['client'] ? '👤 ' . e($p['client']) : '—' ?></td>
             <?php endif; ?>
-        </td>
-    </tr>
-    <?php
+            <?php if (isset($catRuns[$i])): ?>
+                <td<?= $catRuns[$i] > 1 ? ' rowspan="' . $catRuns[$i] . '"' : '' ?>><?= $p['category'] ? e(projectCategoryIcon($p['category'])) . ' ' . e($p['category']) : '—' ?></td>
+            <?php endif; ?>
+            <?php if (isset($typeRuns[$i])): ?>
+                <td<?= $typeRuns[$i] > 1 ? ' rowspan="' . $typeRuns[$i] . '"' : '' ?>>
+                    <?php if ($p['types']): ?>
+                        <?php foreach ($p['types'] as $t): ?>
+                            <span class="badge badge--role"><?= e(projectTypeIcon($t)) ?> <?= e($t) ?></span>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </td>
+            <?php endif; ?>
+            <?php if (isset($roleRuns[$i])): ?>
+                <td<?= $roleRuns[$i] > 1 ? ' rowspan="' . $roleRuns[$i] . '"' : '' ?>><?= $p['role'] ? '🎯 ' . e($p['role']) : '—' ?></td>
+            <?php endif; ?>
+            <td><strong><a href="view.php?id=<?= (int) $p['id'] ?>"><?= e($p['name']) ?></a></strong></td>
+            <td><?= e($p['description'] ?: '—') ?></td>
+            <td><?= (int) $p['password_count'] ?></td>
+            <td class="table__actions">
+                <?php if ($isAdmin || ($p['my_role'] ?? null) === 'manager'): ?>
+                    <a class="btn btn--small" href="edit.php?id=<?= (int) $p['id'] ?>">Edit</a>
+                <?php else: ?>
+                    <a class="btn btn--small btn--ghost" href="view.php?id=<?= (int) $p['id'] ?>">View</a>
+                <?php endif; ?>
+            </td>
+        </tr>
+        <?php
+    }
 }
 
 /** Renders one project's card -- shared between the flat grid and every date group. */
@@ -97,8 +165,11 @@ function renderProjectCard(array $p, bool $isAdmin, string $viewMode): void
         </div>
 
         <div class="credential-card__meta">
+            <?php if ($p['client']): ?><span class="badge badge--role">👤 <?= e($p['client']) ?></span><?php endif; ?>
             <?php if ($p['category']): ?><a class="badge badge--role" href="index.php?category=<?= urlencode($p['category']) ?>&amp;view=<?= e($viewMode) ?>"><?= e($p['category']) ?></a><?php endif; ?>
-            <?php if ($p['type']): ?><a class="badge badge--role" href="index.php?type=<?= urlencode($p['type']) ?>&amp;view=<?= e($viewMode) ?>"><?= e(projectTypeIcon($p['type'])) ?> <?= e($p['type']) ?></a><?php endif; ?>
+            <?php foreach ($p['types'] as $t): ?>
+                <a class="badge badge--role" href="index.php?type=<?= urlencode($t) ?>&amp;view=<?= e($viewMode) ?>"><?= e(projectTypeIcon($t)) ?> <?= e($t) ?></a>
+            <?php endforeach; ?>
             <?php if ($p['role']): ?><span class="badge badge--role">🎯 <?= e($p['role']) ?></span><?php endif; ?>
             <span class="badge badge--role"><?= (int) $p['password_count'] ?> credential<?= (int) $p['password_count'] === 1 ? '' : 's' ?></span>
         </div>
@@ -125,19 +196,18 @@ function renderProjectSet(array $projects, string $viewMode, bool $isAdmin): voi
             <thead>
                 <tr>
                     <?php if ($isAdmin): ?><th style="width:36px"><input type="checkbox" class="proj-check-all-group"></th><?php endif; ?>
-                    <th>Name</th>
+                    <th>Client</th>
                     <th>Category</th>
                     <th>Type</th>
                     <th>Role</th>
+                    <th>Name</th>
                     <th>Description</th>
                     <th>Passwords</th>
                     <th class="table__actions">Actions</th>
                 </tr>
             </thead>
             <tbody>
-            <?php foreach ($projects as $p): ?>
-                <?php renderProjectRow($p, $isAdmin, $viewMode); ?>
-            <?php endforeach; ?>
+            <?php renderMergedProjectTable($projects, $isAdmin); ?>
             </tbody>
         </table>
         </div>
@@ -165,6 +235,9 @@ require __DIR__ . '/../includes/header.php';
                 <a class="btn btn--small<?= $viewMode === 'table' ? ' btn--primary' : ' btn--ghost' ?>" href="<?= e($tableUrl) ?>">☰ Table</a>
                 <a class="btn btn--small<?= $groupBy === 'date' ? ' btn--primary' : ' btn--ghost' ?>" href="<?= e($dateToggleUrl) ?>">📅 By Date</a>
             </div>
+            <?php if (hasPermission('passwords.manage')): ?>
+                <a class="btn" href="<?= BASE_URL ?>/projects/roles.php">Project Roles</a>
+            <?php endif; ?>
             <?php if ($isAdmin): ?>
                 <a class="btn" href="<?= BASE_URL ?>/categories/index.php">Categories</a>
             <?php endif; ?>
@@ -212,36 +285,49 @@ require __DIR__ . '/../includes/header.php';
             <?= csrf_field() ?>
         <?php endif; ?>
 
-        <?php if ($groupBy === 'date'): ?>
-            <?php
+        <?php
+            // Default view: collapsible groups by Category (the Projects
+            // analogue of the Vault's System grouping), with repeated
+            // Category/Type/Role cells merged inside each group. "By Date"
+            // switches the same tables over to date groups instead.
+            $groupKey = $groupBy === 'date' ? 'date' : 'category';
+            $groupIcons = ['date' => '📅', 'category' => '🏷'];
             $groups = [];
             foreach ($projects as $p) {
-                $day = date('Y-m-d', strtotime($p['created_at']));
-                if (!isset($groups[$day])) {
-                    $groups[$day] = ['label' => relativeDayLabel($p['created_at']), 'rows' => []];
+                if ($groupBy === 'date') {
+                    $day = date('Y-m-d', strtotime($p['created_at']));
+                    $key = $day;
+                    $label = relativeDayLabel($p['created_at']);
+                } else {
+                    $key = $p['category'] !== '' ? $p['category'] : '__uncategorized__';
+                    $label = $p['category'] !== '' ? $p['category'] : 'Uncategorized';
                 }
-                $groups[$day]['rows'][] = $p;
+                if (!isset($groups[$key])) {
+                    $groups[$key] = ['label' => $label, 'rows' => []];
+                }
+                $groups[$key]['rows'][] = $p;
             }
-            krsort($groups);
+            if ($groupBy === 'date') {
+                krsort($groups);
+            } else {
+                uasort($groups, static fn ($a, $b) => strcasecmp($a['label'], $b['label']));
+            }
             ?>
-            <?php if (count($groups) > 1): ?>
-                <div class="group-controls">
+            <div class="group-controls">
+                <?php if (count($groups) > 1): ?>
                     <button type="button" class="btn btn--small btn--ghost" id="expand-all-btn">⊞ Expand All</button>
                     <button type="button" class="btn btn--small btn--ghost" id="collapse-all-btn">⊟ Collapse All</button>
-                </div>
-            <?php endif; ?>
+                <?php endif; ?>
+            </div>
             <?php foreach ($groups as $group): ?>
                 <details class="vault-group" open>
                     <summary class="vault-group__summary">
-                        <span><?= e($group['label']) ?></span>
+                        <span><?= e($groupIcons[$groupKey]) ?> <?= e($group['label']) ?></span>
                         <span class="badge badge--role"><?= count($group['rows']) ?></span>
                     </summary>
                     <?php renderProjectSet($group['rows'], $viewMode, $isAdmin); ?>
                 </details>
             <?php endforeach; ?>
-        <?php else: ?>
-            <?php renderProjectSet($projects, $viewMode, $isAdmin); ?>
-        <?php endif; ?>
 
         <?php if ($isAdmin): ?>
         <div class="form-actions">

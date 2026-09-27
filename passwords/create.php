@@ -8,15 +8,31 @@
  * everywhere else for that project.
  */
 require_once __DIR__ . '/../includes/init.php';
-requirePermission('passwords.manage');
+requireLogin();
+if (!canCreateCredentials()) {
+    require __DIR__ . '/../403.php';
+    exit;
+}
 
 $pageTitle = 'New Credential';
 $activePage = 'passwords';
 
-// A Manager can only file a new credential under a project they're a member
-// of (or a brand-new one, via "+ Create new project" below) -- not any
-// project in the system.
+// A Manager (or a create-only Tester) can only file a new credential under a
+// project they're a member of (or a brand-new one, via "+ Create new project"
+// below) -- not any project in the system.
 $projects = myAccessibleProjects();
+
+// Create-only users get no edit/delete rights, and are kept to existing
+// member projects (no "+ Create new project", no un-projected credentials).
+$canFullManage = hasPermission('passwords.manage');
+
+// Roles allowed per project: a credential's "Role" must be one of the roles
+// the selected project defines (an admin/manager picks/creates those on the
+// New/Edit Project form -- a Tester can only select from them here).
+$projectRoles = [];
+foreach ($projects as $p) {
+    $projectRoles[(int) $p['id']] = projectCredentialRoles((int) $p['id']);
+}
 
 $errors = [];
 $old = [
@@ -26,11 +42,14 @@ $old = [
     'url'         => '',
     'notes'       => '',
     'extra_info'  => '',
+    'role'        => '',
     // Arriving from a project's own "+ New Credential" button pre-selects
     // that project, so you're not hunting for it again in the dropdown.
     'project_id'  => (int) ($_GET['project_id'] ?? 0),
 ];
 $newProjectName = '';
+
+$selectedProjectRoles = $old['project_id'] > 0 ? ($projectRoles[$old['project_id']] ?? []) : [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf($_POST['csrf_token'] ?? null)) {
@@ -44,17 +63,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'url'         => trim($_POST['url'] ?? ''),
             'notes'       => trim($_POST['notes'] ?? ''),
             'extra_info'  => trim($_POST['extra_info'] ?? ''),
+            'role'        => trim($_POST['role'] ?? ''),
             'project_id'  => ($_POST['project_id'] ?? '') === '__new__' ? -1 : (int) ($_POST['project_id'] ?? 0),
         ];
+        $selectedProjectRoles = $old['project_id'] > 0 ? ($projectRoles[$old['project_id']] ?? []) : [];
 
         if ($old['password'] === '') {
             $errors[] = 'A password value is required.';
         }
+        if ($old['project_id'] === -1 && !$canFullManage) {
+            $errors[] = 'Only a Manager or Administrator can create a new project here.';
+        }
         if ($old['project_id'] === -1 && $newProjectName === '') {
             $errors[] = 'Enter a name for the new project.';
         }
+        if ($old['project_id'] === 0 && !$canFullManage) {
+            $errors[] = 'Select a project for this credential.';
+        }
         if ($old['project_id'] > 0 && !canAccessProject($old['project_id'])) {
             $errors[] = 'You are not a member of that project.';
+        }
+        if ($old['role'] !== '' && !in_array($old['role'], $selectedProjectRoles, true)) {
+            $errors[] = 'That role is not one of this project\'s roles. Pick from the list.';
         }
         $policyErrors = validatePasswordPolicy($old['password'], effectivePolicy());
         if ($policyErrors) {
@@ -100,9 +130,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
             }
-            $finalTitle = $old['username'] !== '' ? $old['username']
+            $baseTitle = $old['username'] !== '' ? $old['username']
                 : ($old['email'] !== '' ? $old['email']
                 : ($projectNameForTitle !== '' ? $projectNameForTitle : 'Untitled credential'));
+            $finalTitle = $old['role'] !== '' ? $old['role'] . ' — ' . $baseTitle : $baseTitle;
+            rememberCredentialType($old['role']);
 
             $stmt = $db->prepare(
                 'INSERT INTO passwords (title, category, username, email, encrypted, url, notes, extra_info, project_id, created_by)
@@ -132,14 +164,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // Project id -> inherited badge info, for the JS to redraw on change without
-// a round trip -- same data the PHP-rendered initial state below uses.
+// a round trip -- same data the PHP-rendered initial state below uses. A
+// project can carry several Types at once, so "types" is a list.
 $projectMeta = [];
 foreach ($projects as $p) {
     $projectMeta[(int) $p['id']] = [
         'category'     => (string) $p['category'],
-        'type'         => (string) $p['type'],
         'categoryIcon' => $p['category'] !== '' ? projectCategoryIcon((string) $p['category']) : '',
-        'typeIcon'     => $p['type'] !== '' ? projectTypeIcon((string) $p['type']) : '',
+        'types'        => array_map(static fn ($t) => ['name' => $t, 'icon' => projectTypeIcon($t)], $p['types']),
+        'roles'        => $projectRoles[(int) $p['id']] ?? [],
     ];
 }
 $selectedProjectMeta = $projectMeta[$old['project_id']] ?? null;
@@ -167,18 +200,31 @@ require __DIR__ . '/../includes/header.php';
                 <?php foreach ($projects as $p): ?>
                     <option value="<?= (int) $p['id'] ?>" <?= $old['project_id'] === (int) $p['id'] ? 'selected' : '' ?>><?= e($p['name']) ?></option>
                 <?php endforeach; ?>
-                <option value="__new__" <?= $old['project_id'] === -1 ? 'selected' : '' ?>>+ Create new project…</option>
+                <?php if ($canFullManage): ?>
+                    <option value="__new__" <?= $old['project_id'] === -1 ? 'selected' : '' ?>>+ Create new project…</option>
+                <?php endif; ?>
             </select>
             <input type="text" id="new_project_name" name="new_project_name" value="<?= e($newProjectName) ?>"
                    placeholder="New project name" style="margin-top:8px" <?= $old['project_id'] === -1 ? '' : 'hidden' ?>>
-            <div class="project-inherited-badges" id="project-inherited-badges" <?= $selectedProjectMeta && ($selectedProjectMeta['category'] || $selectedProjectMeta['type']) ? '' : 'hidden' ?>>
+            <div class="project-inherited-badges" id="project-inherited-badges" <?= $selectedProjectMeta && ($selectedProjectMeta['category'] || $selectedProjectMeta['types']) ? '' : 'hidden' ?>>
                 <?php if ($selectedProjectMeta && $selectedProjectMeta['category']): ?>
                     <span class="badge badge--role"><?= e($selectedProjectMeta['categoryIcon']) ?> <?= e($selectedProjectMeta['category']) ?></span>
                 <?php endif; ?>
-                <?php if ($selectedProjectMeta && $selectedProjectMeta['type']): ?>
-                    <span class="badge badge--role"><?= e($selectedProjectMeta['typeIcon']) ?> <?= e($selectedProjectMeta['type']) ?></span>
-                <?php endif; ?>
+                <?php foreach ($selectedProjectMeta['types'] ?? [] as $t): ?>
+                    <span class="badge badge--role"><?= e($t['icon']) ?> <?= e($t['name']) ?></span>
+                <?php endforeach; ?>
             </div>
+        </div>
+
+        <div class="form-group">
+            <label for="role">Role <span class="muted">(one of the selected project's credential roles)</span></label>
+            <select id="role" name="role">
+                <option value="">— None —</option>
+                <?php foreach ($selectedProjectRoles as $pr): ?>
+                    <option value="<?= e($pr) ?>" <?= $old['role'] === $pr ? 'selected' : '' ?>><?= e($pr) ?></option>
+                <?php endforeach; ?>
+            </select>
+            <p class="muted" id="role-empty-hint" <?= $selectedProjectRoles ? 'hidden' : '' ?>>This project has no credential roles yet. A Manager or Administrator can add them on the Edit Project page.</p>
         </div>
 
         <div class="form-group">
@@ -230,7 +276,27 @@ require __DIR__ . '/../includes/header.php';
         var select = document.getElementById('project_id');
         var newName = document.getElementById('new_project_name');
         var badges = document.getElementById('project-inherited-badges');
+        var roleSelect = document.getElementById('role');
+        var roleHint = document.getElementById('role-empty-hint');
         if (!select) { return; }
+
+        function refreshRoleOptions() {
+            if (!roleSelect) { return; }
+            var meta = projectMeta[select.value];
+            var roles = (meta && meta.roles) || [];
+            roleSelect.textContent = '';
+            var none = document.createElement('option');
+            none.value = '';
+            none.textContent = '— None —';
+            roleSelect.appendChild(none);
+            roles.forEach(function (name) {
+                var opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                roleSelect.appendChild(opt);
+            });
+            if (roleHint) { roleHint.hidden = roles.length > 0; }
+        }
 
         function makeBadge(icon, text) {
             var span = document.createElement('span');
@@ -244,16 +310,19 @@ require __DIR__ . '/../includes/header.php';
                 newName.hidden = select.value !== '__new__';
                 if (!newName.hidden) { newName.focus(); }
             }
+            refreshRoleOptions();
             if (!badges) { return; }
             var meta = projectMeta[select.value];
             badges.textContent = '';
             var any = false;
             if (meta) {
                 if (meta.category) { badges.appendChild(makeBadge(meta.categoryIcon, meta.category)); any = true; }
-                if (meta.type) { badges.appendChild(makeBadge(meta.typeIcon, meta.type)); any = true; }
+                (meta.types || []).forEach(function (t) { badges.appendChild(makeBadge(t.icon, t.name)); any = true; });
             }
             badges.hidden = !any;
         });
+
+        refreshRoleOptions();
     })();
 </script>
 

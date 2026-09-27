@@ -1,6 +1,12 @@
 <?php
 /**
  * Edit an existing password entry.
+ *
+ * Mirrors the create flow: there's no free-text "System Name" field and no
+ * separate Category to fill in -- the title is derived from Username > Email
+ * > Project name (with the Role prefix in front), and the Category is
+ * inherited from the Project. Nothing here asks for data the create page
+ * doesn't already capture.
  */
 require_once __DIR__ . '/../includes/init.php';
 requirePermission('passwords.manage');
@@ -30,7 +36,6 @@ $userGroups = usersGroupedByRole();
 // Same project scoping as the create form: a Manager can only re-file this
 // credential under a project they're a member of, not any project.
 $projects = myAccessibleProjects();
-$categories = categoryOptions();
 $loginRoles = credentialTypeOptions();
 
 $roleStmt = $db->prepare('SELECT role_id FROM password_roles WHERE password_id = :id');
@@ -39,11 +44,39 @@ $selectedRoles = array_map('intval', array_column($roleStmt->fetchAll(), 'role_i
 
 $titleParts = splitLoginRoleTitle($item['title']);
 
+// Derives the identifying part of a title (and the inherited Category) the
+// same way the create form does: Username > Email > Project name. Falls back
+// to whatever was already stored (title base / category) instead of the
+// empty-state placeholder, so re-saving an existing credential for an
+// unrelated reason (e.g. rotating the password) can't silently wipe a real
+// title down to "Untitled credential" or blank out a category just because
+// this save has no project/username/email to derive from.
+$deriveTitleParts = function (string $username, string $email, int $projectId) use ($item, $titleParts): array {
+    global $projects;
+    $projectName = '';
+    $category = '';
+    foreach ($projects as $p) {
+        if ((int) $p['id'] === $projectId) {
+            $projectName = $p['name'];
+            $category = (string) $p['category'];
+            break;
+        }
+    }
+    $base = $username !== '' ? $username
+        : ($email !== '' ? $email
+        : ($projectName !== '' ? $projectName
+        : ($titleParts['base'] !== '' ? $titleParts['base'] : 'Untitled credential')));
+    if ($category === '') {
+        $category = (string) $item['category'];
+    }
+    return ['project' => $projectName, 'category' => $category, 'base' => $base];
+};
+
+$derivedTitleBase = $deriveTitleParts($item['username'], (string) $item['email'], (int) $item['project_id']);
+
 $errors = [];
 $old = [
-    'title'       => $titleParts['base'],
     'login_role'  => $titleParts['role'],
-    'category'    => (string) $item['category'],
     'username'    => $item['username'],
     'email'       => (string) $item['email'],
     'password'    => '',
@@ -59,9 +92,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Security token mismatch. Please try again.';
     } else {
         $old = [
-            'title'       => trim($_POST['title'] ?? ''),
             'login_role'  => trim($_POST['login_role'] ?? ''),
-            'category'    => trim($_POST['category'] ?? ''),
             'username'    => trim($_POST['username'] ?? ''),
             'email'       => trim($_POST['email'] ?? ''),
             'password'    => (string) ($_POST['password'] ?? ''),
@@ -74,9 +105,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $validRoleIds = array_column($roles, 'id');
         $selectedRoles = array_intersect(array_map('intval', $_POST['roles'] ?? []), $validRoleIds);
 
-        if ($old['title'] === '') {
-            $errors[] = 'System name is required.';
-        }
         if ($old['project_id'] > 0 && !canAccessProject($old['project_id'])) {
             $errors[] = 'You are not a member of that project.';
         }
@@ -86,6 +114,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if (!$errors) {
+            $derived = $deriveTitleParts($old['username'], $old['email'], $old['project_id']);
+            $finalTitle = $old['login_role'] !== '' ? $old['login_role'] . ' — ' . $derived['base'] : $derived['base'];
+            rememberCredentialType($old['login_role']);
+
             $encrypted = $old['password'] !== ''
                 ? encrypt_password($old['password'], $appConfig)
                 : $item['encrypted'];
@@ -96,9 +128,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $db->beginTransaction();
 
-            $finalTitle = $old['login_role'] !== '' ? $old['login_role'] . ' — ' . $old['title'] : $old['title'];
-            rememberCredentialType($old['login_role']);
-
             $stmt = $db->prepare(
                 'UPDATE passwords
                     SET title = :title, category = :category, username = :username, email = :email,
@@ -108,7 +137,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
             $stmt->execute([
                 'title'       => $finalTitle,
-                'category'    => $old['category'],
+                'category'    => $derived['category'],
                 'username'    => $old['username'],
                 'email'       => $old['email'],
                 'encrypted'   => $encrypted,
@@ -135,6 +164,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+// Project id -> inherited badge info for the JS (category/type) plus the
+// projected title shown under the Role field -- same data the create form's
+// badges use, reused for the live preview here.
+$projectMeta = [];
+foreach ($projects as $p) {
+    $projectMeta[(int) $p['id']] = [
+        'name'         => $p['name'],
+        'category'     => (string) $p['category'],
+        'categoryIcon' => $p['category'] !== '' ? projectCategoryIcon((string) $p['category']) : '',
+        'types'        => array_map(static fn ($t) => ['name' => $t, 'icon' => projectTypeIcon($t)], $p['types']),
+    ];
+}
+$selectedProjectMeta = $projectMeta[$old['project_id']] ?? null;
+$derived = $deriveTitleParts($old['username'], $old['email'], $old['project_id']);
+$titlePreview = $old['login_role'] !== '' ? $old['login_role'] . ' — ' . $derived['base'] : $derived['base'];
+
 require __DIR__ . '/../includes/header.php';
 ?>
 
@@ -152,28 +197,20 @@ require __DIR__ . '/../includes/header.php';
         <?= csrf_field() ?>
 
         <div class="form-group">
-            <label for="title">System Name *</label>
-            <input type="text" id="title" name="title" value="<?= e($old['title']) ?>" required>
-        </div>
-
-        <div class="grid grid--two">
-            <div class="form-group">
-                <label for="category">Category</label>
-                <select id="category" name="category">
-                    <option value="">— None —</option>
-                    <?php foreach ($categories as $cat): ?>
-                        <option value="<?= e($cat) ?>" <?= $old['category'] === $cat ? 'selected' : '' ?>><?= e($cat) ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="project_id">Project</label>
-                <select id="project_id" name="project_id">
-                    <option value="0">— None —</option>
-                    <?php foreach ($projects as $p): ?>
-                        <option value="<?= (int) $p['id'] ?>" <?= $old['project_id'] === (int) $p['id'] ? 'selected' : '' ?>><?= e($p['name']) ?></option>
-                    <?php endforeach; ?>
-                </select>
+            <label for="project_id">Project</label>
+            <select id="project_id" name="project_id">
+                <option value="0">— None —</option>
+                <?php foreach ($projects as $p): ?>
+                    <option value="<?= (int) $p['id'] ?>" <?= $old['project_id'] === (int) $p['id'] ? 'selected' : '' ?>><?= e($p['name']) ?></option>
+                <?php endforeach; ?>
+            </select>
+            <div class="project-inherited-badges" id="project-inherited-badges" <?= $selectedProjectMeta && ($selectedProjectMeta['category'] || $selectedProjectMeta['types']) ? '' : 'hidden' ?>>
+                <?php if ($selectedProjectMeta && $selectedProjectMeta['category']): ?>
+                    <span class="badge badge--role"><?= e($selectedProjectMeta['categoryIcon']) ?> <?= e($selectedProjectMeta['category']) ?></span>
+                <?php endif; ?>
+                <?php foreach ($selectedProjectMeta['types'] ?? [] as $t): ?>
+                    <span class="badge badge--role"><?= e($t['icon']) ?> <?= e($t['name']) ?></span>
+                <?php endforeach; ?>
             </div>
         </div>
 
@@ -201,6 +238,7 @@ require __DIR__ . '/../includes/header.php';
                     <option value="<?= e($lr) ?>">
                 <?php endforeach; ?>
             </datalist>
+            <p class="muted" style="margin:6px 0 0">Title: <span id="title-preview"><?= e($titlePreview) ?></span></p>
         </div>
 
         <div class="grid grid--two">
@@ -252,5 +290,55 @@ require __DIR__ . '/../includes/header.php';
         </div>
     </form>
 </div>
+
+<script>
+    (function () {
+        var projectMeta = <?= json_encode($projectMeta, JSON_HEX_TAG | JSON_HEX_APOS) ?>;
+        var existingBase = <?= json_encode($titleParts['base'], JSON_HEX_TAG | JSON_HEX_APOS) ?>;
+
+        var select = document.getElementById('project_id');
+        var badges = document.getElementById('project-inherited-badges');
+        var roleInput = document.getElementById('login_role');
+        var usernameInput = document.getElementById('username');
+        var emailInput = document.getElementById('email');
+        var preview = document.getElementById('title-preview');
+        if (!select) { return; }
+
+        function makeBadge(icon, text) {
+            var span = document.createElement('span');
+            span.className = 'badge badge--role';
+            span.textContent = (icon ? icon + ' ' : '') + text;
+            return span;
+        }
+
+        function refreshBadges() {
+            if (!badges) { return; }
+            var meta = projectMeta[select.value];
+            badges.textContent = '';
+            var any = false;
+            if (meta) {
+                if (meta.category) { badges.appendChild(makeBadge(meta.categoryIcon, meta.category)); any = true; }
+                (meta.types || []).forEach(function (t) { badges.appendChild(makeBadge(t.icon, t.name)); any = true; });
+            }
+            badges.hidden = !any;
+        }
+
+        function refreshTitle() {
+            if (!preview) { return; }
+            var meta = projectMeta[select.value];
+            var base = (usernameInput && usernameInput.value) || (emailInput && emailInput.value) || (meta && meta.name) || existingBase || 'Untitled credential';
+            var role = roleInput ? roleInput.value : '';
+            preview.textContent = role ? role + ' — ' + base : base;
+        }
+
+        select.addEventListener('change', function () { refreshBadges(); refreshTitle(); });
+        if (roleInput) { roleInput.addEventListener('input', refreshTitle); }
+        if (usernameInput) { usernameInput.addEventListener('input', refreshTitle); }
+        if (emailInput) { emailInput.addEventListener('input', refreshTitle); }
+
+        refreshBadges();
+        refreshTitle();
+    })();
+</script>
 
 <?php require __DIR__ . '/../includes/footer.php'; ?>

@@ -41,6 +41,7 @@ function sidebarGroups(): array
         ]],
         'administration' => ['label' => 'Administration', 'items' => [
             ['key' => 'assignments', 'href' => '/passwords/assignments.php', 'icon' => 'assignments', 'label' => 'Credential Assignments', 'show' => hasPermission('passwords.manage')],
+            ['key' => 'project-roles', 'href' => '/projects/roles.php', 'icon' => 'roles', 'label' => 'Project Roles', 'show' => hasPermission('passwords.manage')],
             ['key' => 'categories', 'href' => '/categories/index.php', 'icon' => 'categories', 'label' => 'Project Categories & Types', 'show' => true],
             ['key' => 'roles', 'href' => '/roles/index.php', 'icon' => 'roles', 'label' => 'Roles &amp; Permissions', 'show' => hasPermission('roles.manage')],
             ['key' => 'users', 'href' => '/users/index.php', 'icon' => 'users', 'label' => 'User Accounts', 'show' => hasPermission('users.manage')],

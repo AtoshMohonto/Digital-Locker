@@ -5,7 +5,10 @@
  * on day-to-day use. Collapsible, grouped by Project, Category, Type, Role
  * (Access Level), or Date added -- same five groupings as the Credential
  * Vault's own toggle -- so the page scales past a handful of projects instead
- * of one long flat table.
+ * of one long flat table. Each group's System (project name) and Category
+ * cells are span-merged across runs of identical values. The Role column
+ * carries each credential's own login role (the em-dash title prefix), and
+ * the Access column holds the access-level badges plus the edit button.
  *
  * A credential can have several Managers and several Testers marked at once
  * (password_assignees), picked independently via the "Assign Manager" /
@@ -167,6 +170,30 @@ if ($groupBy === 'date') {
 }
 
 /**
+ * Run-length map for span-merging consecutive identical cells (System,
+ * Category, Type). Only values that repeat across more than one row get a
+ * rowspan -- single rows render a plain cell. Returned map: row index of a
+ * run's first row => run length.
+ */
+function assignmentColumnRuns(array $rows, string $field): array
+{
+    $runs = [];
+    $n = count($rows);
+    for ($i = 0; $i < $n;) {
+        $v = (string) ($rows[$i][$field] ?? '');
+        $j = $i + 1;
+        while ($j < $n && (string) ($rows[$j][$field] ?? '') === $v) {
+            $j++;
+        }
+        if ($j - $i > 1) {
+            $runs[$i] = $j - $i;
+        }
+        $i = $j;
+    }
+    return $runs;
+}
+
+/**
  * Renders one "Assign Manager" / "Assign Tester" cell: a checklist popover
  * (marks several people at once) when editable, or a plain name list when
  * the current user isn't allowed to touch that slot (Manager role viewing
@@ -273,34 +300,50 @@ require __DIR__ . '/../includes/header.php';
                 <table class="table">
                     <thead>
                         <tr>
-                            <th>System Name</th>
-                            <th><?= $groupBy === 'category' ? 'Project' : 'Category' ?></th>
-                            <th>Type</th>
+                            <th>System</th>
+                            <th>Category</th>
+                            <th>Role</th>
                             <th>Assign Manager</th>
                             <th>Assign Tester</th>
-                            <th>Access</th>
+                            <th class="table__actions">Access</th>
                         </tr>
                     </thead>
                     <tbody>
-                    <?php foreach ($group['rows'] as $row): ?>
+                    <?php
+                    // Same span-merge pattern as the Credential Vault: the
+                    // System (project name) and Category cells collapse across
+                    // runs of identical values. Role shows the credential's
+                    // own login role (the em-dash title prefix, e.g. "Admin"),
+                    // while Access carries the access-level badges and the
+                    // edit button -- two distinct concepts, nothing duplicated.
+                    $sysRuns = assignmentColumnRuns($group['rows'], 'project_name');
+                    $catRuns = assignmentColumnRuns($group['rows'], 'category');
+                    ?>
+                    <?php foreach ($group['rows'] as $i => $row): ?>
                         <?php
                         $pid = (int) $row['id'];
-                        $loginType = extractLoginRole($row['title']);
-                        $hasLoginType = $loginType !== $row['title'];
                         $currentManagers = $assigneesByPassword[$pid]['manager'] ?? [];
                         $currentTesters  = $assigneesByPassword[$pid]['tester'] ?? [];
                         ?>
                         <tr>
-                            <td><strong><a href="view.php?id=<?= $pid ?>"><?= e($row['title']) ?></a></strong></td>
-                            <?php if ($groupBy === 'category'): ?>
-                                <td><?= $row['project_id'] ? '<a href="' . BASE_URL . '/projects/view.php?id=' . (int) $row['project_id'] . '">' . e($row['project_name']) . '</a>' : '—' ?></td>
-                            <?php else: ?>
-                                <td><?= $row['category'] ? '<a href="index.php?category=' . urlencode($row['category']) . '">' . e($row['category']) . '</a>' : '—' ?></td>
+                            <?php if (isset($sysRuns[$i])): ?>
+                                <td<?= $sysRuns[$i] > 1 ? ' rowspan="' . $sysRuns[$i] . '"' : '' ?>>
+                                    <?= $row['project_id'] ? '<a href="' . BASE_URL . '/projects/view.php?id=' . (int) $row['project_id'] . '">' . e($row['project_name']) . '</a>' : '—' ?>
+                                </td>
                             <?php endif; ?>
-                            <td><?= $hasLoginType ? '<span class="badge badge--role">' . e($loginType) . '</span>' : '—' ?></td>
+                            <?php if (isset($catRuns[$i])): ?>
+                                <td<?= $catRuns[$i] > 1 ? ' rowspan="' . $catRuns[$i] . '"' : '' ?>>
+                                    <?= $row['category'] ? '<a href="index.php?category=' . urlencode($row['category']) . '">' . e($row['category']) . '</a>' : '—' ?>
+                                </td>
+                            <?php endif; ?>
+                            <td>
+                                <?php $roleParts = splitLoginRoleTitle($row['title']); ?>
+                                <div><?= $roleParts['role'] !== '' ? '<span class="badge badge--role">' . e($roleParts['role']) . '</span>' : '—' ?></div>
+                                <a class="muted" style="font-size:0.78rem" href="view.php?id=<?= $pid ?>"><?= e($roleParts['base']) ?></a>
+                            </td>
                             <td><?= renderAssigneeCell($pid, 'manager', $managerUsers, $currentManagers, $isAdmin, $returnTo) ?></td>
                             <td><?= renderAssigneeCell($pid, 'tester', $testerUsers, $currentTesters, true, $returnTo) ?></td>
-                            <td>
+                            <td class="table__actions">
                                 <?php if ($row['role_pairs']): ?>
                                     <?php foreach (explode('||', $row['role_pairs']) as $pair): ?>
                                         <?php [, $roleName] = explode(':', $pair, 2); ?>

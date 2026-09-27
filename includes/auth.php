@@ -172,15 +172,37 @@ function myAccessibleProjects(): array
 {
     global $db;
     if (isAdministrator()) {
-        return $db->query('SELECT id, name, category, type FROM projects ORDER BY name')->fetchAll();
+        $projects = $db->query('SELECT id, name, category, type, role FROM projects ORDER BY name')->fetchAll();
+    } else {
+        $stmt = $db->prepare(
+            'SELECT p.id, p.name, p.category, p.type, p.role FROM projects p
+               JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = :uid
+              ORDER BY p.name'
+        );
+        $stmt->execute(['uid' => (int) currentUser()['id']]);
+        $projects = $stmt->fetchAll();
     }
-    $stmt = $db->prepare(
-        'SELECT p.id, p.name, p.category, p.type FROM projects p
-           JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = :uid
-          ORDER BY p.name'
-    );
-    $stmt->execute(['uid' => (int) currentUser()['id']]);
-    return $stmt->fetchAll();
+
+    // A project can carry several Types at once (project_type_links) -- load
+    // them all in one follow-up query and attach as $p['types'], same pattern
+    // as loading each project's Credential Roles elsewhere. $p['type'] (the
+    // old single-value column) is left as-is but unused by the app now.
+    $ids = array_column($projects, 'id');
+    $typesById = [];
+    if ($ids) {
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $typeStmt = $db->prepare("SELECT project_id, type_name FROM project_type_links WHERE project_id IN ($placeholders) ORDER BY type_name");
+        $typeStmt->execute(array_values(array_map('intval', $ids)));
+        foreach ($typeStmt->fetchAll() as $row) {
+            $typesById[(int) $row['project_id']][] = (string) $row['type_name'];
+        }
+    }
+    foreach ($projects as &$p) {
+        $p['types'] = $typesById[(int) $p['id']] ?? [];
+    }
+    unset($p);
+
+    return $projects;
 }
 
 /**

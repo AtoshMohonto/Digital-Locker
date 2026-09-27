@@ -370,6 +370,33 @@ if (!in_array('type', $projectColumns, true)) {
     $skipped[] = 'projects.type';
 }
 
+// A project can now carry more than one Type at once (e.g. Web App + Mobile
+// App on the same project) -- project_type_links is the many-to-many source
+// of truth going forward, same pattern as project_roles. projects.type (the
+// single-value column above) is left in place but unused by the app from
+// here on; existing single values are backfilled into the new table once so
+// nothing already saved is lost.
+$tables = $pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);
+if (!in_array('project_type_links', $tables, true)) {
+    $pdo->exec(
+        "CREATE TABLE project_type_links (
+            id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            project_id INT UNSIGNED NOT NULL,
+            type_name  VARCHAR(60) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uniq_project_type (project_id, type_name),
+            CONSTRAINT fk_ptl_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB"
+    );
+    $pdo->exec(
+        "INSERT IGNORE INTO project_type_links (project_id, type_name)
+            SELECT id, type FROM projects WHERE type != ''"
+    );
+    $applied[] = 'project_type_links (table, backfilled)';
+} else {
+    $skipped[] = 'project_type_links (table)';
+}
+
 // Credential "Type" (e.g. Admin, Manager, Teacher -- the "Role — System Name"
 // prefix): used to be purely freeform text, derived on the fly from whatever
 // was already typed into existing titles. Now a real catalog, same pattern as
@@ -492,6 +519,89 @@ if (!in_array('project_purposes', $tables, true)) {
 } else {
     $skipped[] = 'project_purposes (table)';
 }
+
+// Project "Client": who the project is being done for (e.g. a freelance
+// client's name or company) -- free-text-with-suggestions, same pattern as
+// Category/Type/Sub Type.
+$projectColumns = [];
+foreach ($pdo->query('SHOW COLUMNS FROM projects')->fetchAll() as $col) {
+    $projectColumns[] = $col['Field'];
+}
+if (!in_array('client', $projectColumns, true)) {
+    $pdo->exec("ALTER TABLE projects ADD COLUMN client VARCHAR(80) NOT NULL DEFAULT '' AFTER name");
+    $applied[] = 'projects.client';
+} else {
+    $skipped[] = 'projects.client';
+}
+
+$tables = $pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);
+if (!in_array('project_clients', $tables, true)) {
+    $pdo->exec(
+        "CREATE TABLE project_clients (
+            id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            name       VARCHAR(80) NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB"
+    );
+    $applied[] = 'project_clients (table)';
+} else {
+    $skipped[] = 'project_clients (table)';
+}
+
+// Project credential roles: which roles a project's credentials may use
+// (e.g. Admin, Teacher), chosen or created by an admin/manager on the New/
+// Edit Project form. Separate from Digital Locker's own Access Level roles
+// and from the project's internal Team -- this is simply the label set that
+// credential forms under this project may pick from.
+$tables = $pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);
+if (!in_array('project_roles', $tables, true)) {
+    $pdo->exec(
+        "CREATE TABLE project_roles (
+            id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            project_id INT UNSIGNED NOT NULL,
+            name       VARCHAR(60) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uniq_project_role (project_id, name),
+            CONSTRAINT fk_proj_role_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB"
+    );
+    $applied[] = 'project_roles (table)';
+} else {
+    $skipped[] = 'project_roles (table)';
+    // Earlier version of this migration created the column as VARCHAR(80),
+    // one size wider than credential_types.name (VARCHAR(60)) even though
+    // role names flow into both tables. Narrow it to match so a name can't
+    // fit in project_roles but get silently truncated the moment it's
+    // remembered into credential_types (this dev DB's sql_mode has no
+    // STRICT_TRANS_TABLES, so that truncation happens quietly, not as an
+    // error).
+    $roleNameCol = $pdo->query("SHOW COLUMNS FROM project_roles LIKE 'name'")->fetch();
+    if ($roleNameCol && stripos((string) $roleNameCol['Type'], 'varchar(60)') === false) {
+        $pdo->exec('ALTER TABLE project_roles MODIFY COLUMN name VARCHAR(60) NOT NULL');
+        $applied[] = 'project_roles.name (narrowed to VARCHAR(60), matches credential_types.name)';
+    } else {
+        $skipped[] = 'project_roles.name (width)';
+    }
+}
+
+// passwords.create: a create-only permission so a Tester can add credentials
+// (single or bulk, role picker restricted to the project's roles) without
+// being able to edit, delete, assign, export or import anything.
+// INSERT IGNORE makes it safe to re-run; Administrators/Managers already
+// hold passwords.manage, the extra row just documents the catalogue entry.
+$roleIds = [];
+foreach ($pdo->query('SELECT id, name FROM roles')->fetchAll() as $r) {
+    $roleIds[$r['name']] = (int) $r['id'];
+}
+$grantPerm = $pdo->prepare('INSERT IGNORE INTO role_permissions (role_id, permission) VALUES (:rid, :perm)');
+$grants = [];
+if (isset($roleIds['Administrator'])) { $grants[] = [$roleIds['Administrator'], 'passwords.create']; }
+if (isset($roleIds['Manager']))       { $grants[] = [$roleIds['Manager'], 'passwords.create']; }
+if (isset($roleIds['Tester']))        { $grants[] = [$roleIds['Tester'], 'passwords.create']; }
+foreach ($grants as [$rid, $perm]) {
+    $grantPerm->execute(['rid' => $rid, 'perm' => $perm]);
+}
+$applied[] = 'role_permissions: passwords.create granted';
 
 if (PHP_SAPI === 'cli') {
     echo 'Applied : ' . implode(', ', $applied ?: ['(none)']) . PHP_EOL;

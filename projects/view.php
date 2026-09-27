@@ -24,6 +24,9 @@ if (!canAccessProject($id)) {
     exit;
 }
 
+$projectCredentialRoles = projectCredentialRoles($id);
+$projectTypes = projectTypesFor($id);
+
 $canManageProject = hasPermission('projects.manage');
 $canManageTasks   = hasPermission('tasks.manage');
 $myUserId         = (int) currentUser()['id'];
@@ -220,9 +223,16 @@ require __DIR__ . '/../includes/header.php';
 <div class="card">
     <div class="card__header card__header--stack">
         <div>
-            <h2 class="card__title"><?= $project['category'] ? e(projectCategoryIcon($project['category'])) : '📁' ?> <?= e($project['name']) ?><?php if ($project['category']): ?> <span class="badge badge--role"><?= e($project['category']) ?></span><?php endif; ?><?php if ($project['type']): ?> <span class="badge badge--role"><?= e(projectTypeIcon($project['type'])) ?> <?= e($project['type']) ?></span><?php endif; ?><?php if ($project['role']): ?> <span class="badge badge--role">🎯 <?= e($project['role']) ?></span><?php endif; ?></h2>
+            <h2 class="card__title"><?= $project['category'] ? e(projectCategoryIcon($project['category'])) : '📁' ?> <?= e($project['name']) ?><?php if ($project['client']): ?> <span class="badge badge--role">👤 <?= e($project['client']) ?></span><?php endif; ?><?php if ($project['category']): ?> <span class="badge badge--role"><?= e($project['category']) ?></span><?php endif; ?><?php foreach ($projectTypes as $t): ?> <span class="badge badge--role"><?= e(projectTypeIcon($t)) ?> <?= e($t) ?></span><?php endforeach; ?><?php if ($project['role']): ?> <span class="badge badge--role">🎯 <?= e($project['role']) ?></span><?php endif; ?></h2>
             <?php if ($project['description']): ?>
                 <p class="muted" style="margin:4px 0 0"><?= e($project['description']) ?></p>
+            <?php endif; ?>
+            <?php if ($projectCredentialRoles): ?>
+                <p class="muted" style="margin:6px 0 0"><span class="badge badge--role">🎭 Credential roles:</span>
+                    <?php foreach ($projectCredentialRoles as $pr): ?>
+                        <span class="badge badge--role"><?= e($pr) ?></span>
+                    <?php endforeach; ?>
+                </p>
             <?php endif; ?>
         </div>
         <div class="quick-actions quick-actions--row">
@@ -239,7 +249,7 @@ require __DIR__ . '/../includes/header.php';
             <?php if ($canManageProject): ?>
                 <a class="btn btn--small" href="edit.php?id=<?= (int) $project['id'] ?>">Edit Project</a>
             <?php endif; ?>
-            <?php if ($canViewVault && hasPermission('passwords.manage')): ?>
+            <?php if ($canViewVault && canCreateCredentials()): ?>
                 <a class="btn btn--primary" href="<?= BASE_URL ?>/passwords/create.php?project_id=<?= (int) $project['id'] ?>">+ New Credential</a>
             <?php endif; ?>
         </div>
@@ -308,22 +318,37 @@ require __DIR__ . '/../includes/header.php';
         <?php
     }
 
-    function renderProjectCredentialRow(array $row): void
+    function renderProjectCredentialRow(array $row, int $rowspanSystem, int $spanCategory, int $projectId, string $projectName): void
     {
         $canAccess = canAccessCredential((int) $row['id']);
         static $seen = [];
         $seen[$row['id']] = ($seen[$row['id']] ?? -1) + 1;
         $domId = 'secret-row-' . (int) $row['id'] . ($seen[$row['id']] > 0 ? '-' . $seen[$row['id']] : '');
+        $loginRole = extractLoginRole($row['title']);
+        $hasLoginRole = $loginRole !== $row['title'];
         ?>
         <tr>
-            <td><strong><a href="<?= BASE_URL ?>/passwords/view.php?id=<?= (int) $row['id'] ?>"><?= categoryIcon((string) $row['category']) ?> <?= e($row['title']) ?></a></strong></td>
-            <td><?= $row['category'] ? '<a href="' . BASE_URL . '/passwords/index.php?category=' . urlencode($row['category']) . '">' . e($row['category']) . '</a>' : '—' ?></td>
+            <?php if ($rowspanSystem > 0): ?>
+                <td<?= $rowspanSystem > 1 ? ' rowspan="' . $rowspanSystem . '"' : '' ?>>
+                    <strong><a href="<?= BASE_URL ?>/passwords/index.php?view=table&project=<?= (int) $projectId ?>"><?= e($projectName) ?></a></strong>
+                </td>
+            <?php endif; ?>
+            <?php if ($spanCategory > 0): ?>
+                <td<?= $spanCategory > 1 ? ' rowspan="' . $spanCategory . '"' : '' ?>>
+                    <?php if ($row['category']): ?>
+                        <?= categoryIcon((string) $row['category']) ?> <a href="<?= BASE_URL ?>/passwords/index.php?category=<?= urlencode($row['category']) ?>"><?= e($row['category']) ?></a>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </td>
+            <?php endif; ?>
+            <td><?= $hasLoginRole ? '<span class="badge badge--role">' . e($loginRole) . '</span>' : '—' ?></td>
             <td>
                 <?php if ($row['username']): ?>
-                    <?= e($row['username']) ?>
+                    <a href="<?= BASE_URL ?>/passwords/view.php?id=<?= (int) $row['id'] ?>" title="<?= e($row['title']) ?>"><?= e($row['username']) ?></a>
                     <button type="button" class="btn btn--small btn--ghost copy-text-btn" data-copy="<?= e($row['username']) ?>" title="Copy username">📋</button>
                 <?php else: ?>
-                    —
+                    <a href="<?= BASE_URL ?>/passwords/view.php?id=<?= (int) $row['id'] ?>" class="muted"><?= e($row['title']) ?></a>
                 <?php endif; ?>
             </td>
             <td>
@@ -359,21 +384,32 @@ require __DIR__ . '/../includes/header.php';
         <?php
     }
 
-    function renderProjectCredentialSet(array $rows, string $viewMode): void
+    function renderProjectCredentialSet(array $rows, string $viewMode, int $projectId, string $projectName): void
     {
         if ($viewMode === 'table') {
+            // Merged layout exactly like the Credential Vault: one System cell
+            // (this project) spanning the rows, one Category cell per run.
+            $catRuns = [];
+            $n = count($rows);
+            for ($i = 0; $i < $n;) {
+                $v = (string) $rows[$i]['category'];
+                $j = $i + 1;
+                while ($j < $n && (string) $rows[$j]['category'] === $v) { $j++; }
+                $catRuns[$i] = $j - $i;
+                $i = $j;
+            }
             ?>
             <div class="table-wrap">
             <table class="table">
                 <thead>
                     <tr>
-                        <th>System</th><th>Category</th><th>Username</th><th>Email</th><th>Password</th>
+                        <th>System</th><th>Category</th><th>Role</th><th>Username</th><th>Email</th><th>Password</th>
                         <th class="table__actions">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                <?php foreach ($rows as $row): ?>
-                    <?php renderProjectCredentialRow($row); ?>
+                <?php foreach ($rows as $i => $row): ?>
+                    <?php renderProjectCredentialRow($row, $i === 0 ? $n : 0, $catRuns[$i] ?? 0, $projectId, $projectName); ?>
                 <?php endforeach; ?>
                 </tbody>
             </table>
@@ -423,7 +459,7 @@ require __DIR__ . '/../includes/header.php';
                     <span><?= e($roleName) ?></span>
                     <span class="badge badge--role"><?= count($rows) ?></span>
                 </summary>
-                <?php renderProjectCredentialSet($rows, $viewMode); ?>
+                <?php renderProjectCredentialSet($rows, $viewMode, (int) $project['id'], (string) $project['name']); ?>
             </details>
         <?php endforeach; ?>
     <?php else: ?>
@@ -433,7 +469,7 @@ require __DIR__ . '/../includes/header.php';
                 <button type="button" class="btn btn--small btn--ghost" id="hide-all-btn">🙈 Hide All</button>
             </div>
         <?php endif; ?>
-        <?php renderProjectCredentialSet($credentials, $viewMode); ?>
+        <?php renderProjectCredentialSet($credentials, $viewMode, (int) $project['id'], (string) $project['name']); ?>
     <?php endif; ?>
 </div>
 
@@ -475,7 +511,9 @@ function renderMemberGrid(array $group, int $projectId, bool $canManageTasks): v
         <div class="stat-chip"><strong><?= count($testerMembersOnly) ?></strong> Tester<?= count($testerMembersOnly) === 1 ? '' : 's' ?></div>
         <div class="stat-chip">Started <strong><?= e(date('M j, Y', strtotime($project['created_at']))) ?></strong></div>
         <?php if ($project['category']): ?><div class="stat-chip"><?= e(projectCategoryIcon($project['category'])) ?> <strong><?= e($project['category']) ?></strong></div><?php endif; ?>
-        <?php if ($project['type']): ?><div class="stat-chip"><?= e(projectTypeIcon($project['type'])) ?> <strong><?= e($project['type']) ?></strong></div><?php endif; ?>
+        <?php foreach ($projectTypes as $t): ?>
+            <div class="stat-chip"><?= e(projectTypeIcon($t)) ?> <strong><?= e($t) ?></strong></div>
+        <?php endforeach; ?>
     </div>
 
     <?php if (!$members): ?>

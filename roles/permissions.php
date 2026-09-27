@@ -7,6 +7,7 @@ function permissionCatalogue(): array
     return [
         'passwords.view'    => ['group' => 'Passwords', 'label' => 'View passwords & reveal secrets'],
         'passwords.manage'  => ['group' => 'Passwords', 'label' => 'Create, edit and delete passwords'],
+        'passwords.create'  => ['group' => 'Passwords', 'label' => 'Add credentials (single or bulk), roles limited to the project'],
         'projects.manage'   => ['group' => 'Vault',     'label' => 'Manage projects'],
         'tasks.manage'      => ['group' => 'Project workflow', 'label' => 'Assign project team members and manage tasks'],
         'tasks.view'        => ['group' => 'Project workflow', 'label' => 'View and act on assigned tasks'],

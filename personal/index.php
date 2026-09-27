@@ -33,35 +33,18 @@ $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $entries = $stmt->fetchAll();
 
-/** Renders one Personal Vault row -- shared between the flat table and every date group. */
-function renderPersonalRow(array $row): void
-{
-    ?>
-    <tr>
-        <td><strong><?= personalCategoryIcon((string) $row['category']) ?> <?= e($row['title']) ?></strong></td>
-        <td><?= e($row['category'] ?: '—') ?></td>
-        <td><?= e($row['url'] ?: '—') ?></td>
-        <td><?= e($row['username'] ?: '—') ?></td>
-        <td>
-            <span class="secret secret--row" id="secret-row-<?= (int) $row['id'] ?>">••••••••</span>
-            <button type="button" class="btn btn--small btn--ghost reveal-row-btn" data-url="ajax.php?reveal=<?= (int) $row['id'] ?>" data-target="secret-row-<?= (int) $row['id'] ?>" title="Reveal">👁</button>
-        </td>
-        <td class="table__actions">
-            <a class="btn btn--small btn--ghost" href="edit.php?id=<?= (int) $row['id'] ?>" title="Edit">✏️</a>
-            <form class="inline-form" method="post" action="delete.php"
-                  onsubmit="return confirm('Delete this entry?');">
-                <?= csrf_field() ?>
-                <input type="hidden" name="id" value="<?= (int) $row['id'] ?>">
-                <button type="submit" class="btn btn--small btn--ghost" title="Delete">🗑</button>
-            </form>
-        </td>
-    </tr>
-    <?php
-}
-
-/** Renders a set of Personal Vault rows as a table (flat, or one date group's rows). */
+/** Renders a set of Personal Vault rows as a table with a merged Category cell. */
 function renderPersonalSet(array $rows): void
 {
+    $catRuns = [];
+    $n = count($rows);
+    for ($i = 0; $i < $n;) {
+        $v = (string) $rows[$i]['category'];
+        $j = $i + 1;
+        while ($j < $n && (string) $rows[$j]['category'] === $v) { $j++; }
+        $catRuns[$i] = $j - $i;
+        $i = $j;
+    }
     ?>
     <div class="table-wrap">
     <table class="table">
@@ -76,8 +59,28 @@ function renderPersonalSet(array $rows): void
             </tr>
         </thead>
         <tbody>
-        <?php foreach ($rows as $row): ?>
-            <?php renderPersonalRow($row); ?>
+        <?php foreach ($rows as $i => $row): ?>
+            <tr>
+                <td><strong><?= personalCategoryIcon((string) $row['category']) ?> <?= e($row['title']) ?></strong></td>
+                <?php if (isset($catRuns[$i])): ?>
+                    <td<?= $catRuns[$i] > 1 ? ' rowspan="' . $catRuns[$i] . '"' : '' ?>><?= e($row['category'] ?: '—') ?></td>
+                <?php endif; ?>
+                <td><?= e($row['url'] ?: '—') ?></td>
+                <td><?= e($row['username'] ?: '—') ?></td>
+                <td>
+                    <span class="secret secret--row" id="secret-row-<?= (int) $row['id'] ?>">••••••••</span>
+                    <button type="button" class="btn btn--small btn--ghost reveal-row-btn" data-url="ajax.php?reveal=<?= (int) $row['id'] ?>" data-target="secret-row-<?= (int) $row['id'] ?>" title="Reveal">👁</button>
+                </td>
+                <td class="table__actions">
+                    <a class="btn btn--small btn--ghost" href="edit.php?id=<?= (int) $row['id'] ?>" title="Edit">✏️</a>
+                    <form class="inline-form" method="post" action="delete.php"
+                          onsubmit="return confirm('Delete this entry?');">
+                        <?= csrf_field() ?>
+                        <input type="hidden" name="id" value="<?= (int) $row['id'] ?>">
+                        <button type="submit" class="btn btn--small btn--ghost" title="Delete">🗑</button>
+                    </form>
+                </td>
+            </tr>
         <?php endforeach; ?>
         </tbody>
     </table>
@@ -117,35 +120,49 @@ require __DIR__ . '/../includes/header.php';
 
     <?php if (!$entries): ?>
         <p class="muted">No personal entries yet.</p>
-    <?php elseif ($groupBy === 'date'): ?>
-        <?php
+    <?php else: ?>
+    <?php
+        // Default view: collapsible groups by Category (same pattern as the
+        // Credential Vault), with the repeated Category cell span-merged inside
+        // each group. "By Date" switches to date groups instead.
+        $groupKey = $groupBy === 'date' ? 'date' : 'category';
+        $groupIcons = ['date' => '📅', 'category' => '🏷'];
         $groups = [];
         foreach ($entries as $row) {
-            $day = date('Y-m-d', strtotime($row['created_at']));
-            if (!isset($groups[$day])) {
-                $groups[$day] = ['label' => relativeDayLabel($row['created_at']), 'rows' => []];
+            if ($groupBy === 'date') {
+                $day = date('Y-m-d', strtotime($row['created_at']));
+                $key = $day;
+                $label = relativeDayLabel($row['created_at']);
+            } else {
+                $key = $row['category'] !== '' ? $row['category'] : '__uncategorized__';
+                $label = $row['category'] !== '' ? $row['category'] : 'Uncategorized';
             }
-            $groups[$day]['rows'][] = $row;
+            if (!isset($groups[$key])) {
+                $groups[$key] = ['label' => $label, 'rows' => []];
+            }
+            $groups[$key]['rows'][] = $row;
         }
-        krsort($groups);
+        if ($groupBy === 'date') {
+            krsort($groups);
+        } else {
+            uasort($groups, static fn ($a, $b) => strcasecmp($a['label'], $b['label']));
+        }
         ?>
-        <?php if (count($groups) > 1): ?>
-            <div class="group-controls">
+        <div class="group-controls">
+            <?php if (count($groups) > 1): ?>
                 <button type="button" class="btn btn--small btn--ghost" id="expand-all-btn">⊞ Expand All</button>
                 <button type="button" class="btn btn--small btn--ghost" id="collapse-all-btn">⊟ Collapse All</button>
-            </div>
-        <?php endif; ?>
+            <?php endif; ?>
+        </div>
         <?php foreach ($groups as $group): ?>
             <details class="vault-group" open>
                 <summary class="vault-group__summary">
-                    <span><?= e($group['label']) ?></span>
+                    <span><?= e($groupIcons[$groupKey]) ?> <?= e($group['label']) ?></span>
                     <span class="badge badge--role"><?= count($group['rows']) ?></span>
                 </summary>
                 <?php renderPersonalSet($group['rows']); ?>
             </details>
         <?php endforeach; ?>
-    <?php else: ?>
-        <?php renderPersonalSet($entries); ?>
     <?php endif; ?>
 </div>
 

@@ -7,18 +7,31 @@
  * the Project). Empty rows are skipped.
  */
 require_once __DIR__ . '/../includes/init.php';
-requirePermission('passwords.manage');
+requireLogin();
+if (!canCreateCredentials()) {
+    require __DIR__ . '/../403.php';
+    exit;
+}
 
 $pageTitle = 'Bulk Add Credentials';
 $activePage = 'passwords';
 
 $projects = myAccessibleProjects();
-$loginRoles = credentialTypeOptions();
+$canFullManage = hasPermission('passwords.manage');
+
+// Roles allowed per project: each row's Role must be one of the roles the
+// selected project defines (set by an admin/manager on the New/Edit Project
+// form -- a create-only Tester can only select from them here).
+$projectRoles = [];
+foreach ($projects as $p) {
+    $projectRoles[(int) $p['id']] = projectCredentialRoles((int) $p['id']);
+}
 
 $errors = [];
 $old = ['project_id' => (int) ($_GET['project_id'] ?? 0)];
 $newProjectName = '';
 $rows = [];
+$loginRoles = $old['project_id'] > 0 ? ($projectRoles[$old['project_id']] ?? []) : [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf($_POST['csrf_token'] ?? null)) {
@@ -51,15 +64,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$rows) {
             $errors[] = 'Add at least one credential.';
         }
+        if ($old['project_id'] === -1 && !$canFullManage) {
+            $errors[] = 'Only a Manager or Administrator can create a new project here.';
+        }
         if ($old['project_id'] === -1 && $newProjectName === '') {
             $errors[] = 'Enter a name for the new project.';
+        }
+        if ($old['project_id'] === 0 && !$canFullManage) {
+            $errors[] = 'Select a project for these credentials.';
         }
         if ($old['project_id'] > 0 && !canAccessProject($old['project_id'])) {
             $errors[] = 'You are not a member of that project.';
         }
 
+        $projectRoleNames = $old['project_id'] > 0 ? ($projectRoles[$old['project_id']] ?? []) : [];
+
         $policy = effectivePolicy();
         foreach ($rows as $i => $r) {
+            if ($r['role'] !== '' && !in_array($r['role'], $projectRoleNames, true)) {
+                $errors[] = 'Row ' . ($i + 1) . ': "' . $r['role'] . '" is not one of this project\'s roles. Pick from the list.';
+                continue;
+            }
             if ($r['password'] === '') {
                 $errors[] = 'Row ' . ($i + 1) . ': a password is required.';
                 continue;
@@ -140,13 +165,16 @@ if (!$rows) {
     $rows = array_fill(0, 3, ['role' => '', 'username' => '', 'email' => '', 'password' => '', 'url' => '']);
 }
 
+// Re-render the row Role pickers against the (possibly re-submitted) project.
+$loginRoles = $old['project_id'] > 0 ? ($projectRoles[$old['project_id']] ?? []) : [];
+
 $projectMeta = [];
 foreach ($projects as $p) {
     $projectMeta[(int) $p['id']] = [
         'category'     => (string) $p['category'],
-        'type'         => (string) $p['type'],
         'categoryIcon' => $p['category'] !== '' ? projectCategoryIcon((string) $p['category']) : '',
-        'typeIcon'     => $p['type'] !== '' ? projectTypeIcon((string) $p['type']) : '',
+        'types'        => array_map(static fn ($t) => ['name' => $t, 'icon' => projectTypeIcon($t)], $p['types']),
+        'roles'        => $projectRoles[(int) $p['id']] ?? [],
     ];
 }
 $selectedProjectMeta = $projectMeta[$old['project_id']] ?? null;
@@ -174,17 +202,19 @@ require __DIR__ . '/../includes/header.php';
                 <?php foreach ($projects as $p): ?>
                     <option value="<?= (int) $p['id'] ?>" <?= $old['project_id'] === (int) $p['id'] ? 'selected' : '' ?>><?= e($p['name']) ?></option>
                 <?php endforeach; ?>
-                <option value="__new__" <?= $old['project_id'] === -1 ? 'selected' : '' ?>>+ Create new project…</option>
+                <?php if ($canFullManage): ?>
+                    <option value="__new__" <?= $old['project_id'] === -1 ? 'selected' : '' ?>>+ Create new project…</option>
+                <?php endif; ?>
             </select>
             <input type="text" id="new_project_name" name="new_project_name" value="<?= e($newProjectName) ?>"
                    placeholder="New project name" style="margin-top:8px" <?= $old['project_id'] === -1 ? '' : 'hidden' ?>>
-            <div class="project-inherited-badges" id="project-inherited-badges" <?= $selectedProjectMeta && ($selectedProjectMeta['category'] || $selectedProjectMeta['type']) ? '' : 'hidden' ?>>
+            <div class="project-inherited-badges" id="project-inherited-badges" <?= $selectedProjectMeta && ($selectedProjectMeta['category'] || $selectedProjectMeta['types']) ? '' : 'hidden' ?>>
                 <?php if ($selectedProjectMeta && $selectedProjectMeta['category']): ?>
                     <span class="badge badge--role"><?= e($selectedProjectMeta['categoryIcon']) ?> <?= e($selectedProjectMeta['category']) ?></span>
                 <?php endif; ?>
-                <?php if ($selectedProjectMeta && $selectedProjectMeta['type']): ?>
-                    <span class="badge badge--role"><?= e($selectedProjectMeta['typeIcon']) ?> <?= e($selectedProjectMeta['type']) ?></span>
-                <?php endif; ?>
+                <?php foreach ($selectedProjectMeta['types'] ?? [] as $t): ?>
+                    <span class="badge badge--role"><?= e($t['icon']) ?> <?= e($t['name']) ?></span>
+                <?php endforeach; ?>
             </div>
         </div>
 
@@ -266,6 +296,26 @@ require __DIR__ . '/../includes/header.php';
         var newName = document.getElementById('new_project_name');
         var badges = document.getElementById('project-inherited-badges');
 
+        function refreshRoleSelects() {
+            var meta = projectMeta[select.value];
+            var roles = (meta && meta.roles) || [];
+            document.querySelectorAll('select[name="role[]"]').forEach(function (sel) {
+                var current = sel.value;
+                sel.textContent = '';
+                var none = document.createElement('option');
+                none.value = '';
+                none.textContent = '— None —';
+                sel.appendChild(none);
+                roles.forEach(function (name) {
+                    var opt = document.createElement('option');
+                    opt.value = name;
+                    opt.textContent = name;
+                    if (name === current) { opt.selected = true; }
+                    sel.appendChild(opt);
+                });
+            });
+        }
+
         function makeBadge(icon, text) {
             var span = document.createElement('span');
             span.className = 'badge badge--role';
@@ -279,16 +329,18 @@ require __DIR__ . '/../includes/header.php';
                     newName.hidden = select.value !== '__new__';
                     if (!newName.hidden) { newName.focus(); }
                 }
+                refreshRoleSelects();
                 if (!badges) { return; }
                 var meta = projectMeta[select.value];
                 badges.textContent = '';
                 var any = false;
                 if (meta) {
                     if (meta.category) { badges.appendChild(makeBadge(meta.categoryIcon, meta.category)); any = true; }
-                    if (meta.type) { badges.appendChild(makeBadge(meta.typeIcon, meta.type)); any = true; }
+                    (meta.types || []).forEach(function (t) { badges.appendChild(makeBadge(t.icon, t.name)); any = true; });
                 }
                 badges.hidden = !any;
             });
+            refreshRoleSelects();
         }
 
         var body = document.getElementById('bulk-rows-body');

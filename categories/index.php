@@ -1,11 +1,11 @@
 <?php
 /**
- * Project Categories & Types: three independent catalogues (Project
- * Categories, Project Types, and Credential Types) managed from one page.
- * Everyone can view it; an Administrator or Manager can add/edit entries;
- * only an Administrator can delete one. Deleting an entry only removes it
- * from its picker -- anything already using it keeps that text value, it
- * just won't be offered going forward.
+ * Project Categories & Types: four independent catalogues (Project
+ * Categories, Project Types, Credential Types, and Project Sub Types)
+ * managed from one page. Everyone can view it; an Administrator or Manager
+ * can add/edit entries; only an Administrator can delete one. Deleting an
+ * entry only removes it from its picker -- anything already using it keeps
+ * that text value, it just won't be offered going forward.
  */
 require_once __DIR__ . '/../includes/init.php';
 requireLogin();
@@ -64,8 +64,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $do = $_POST['do'] ?? '';
-    $mutations = ['create_category', 'edit_category', 'create_type', 'edit_type', 'create_credtype', 'edit_credtype'];
-    $deletions = ['delete_selected_categories', 'delete_selected_types', 'delete_selected_credtypes'];
+    $mutations = ['create_category', 'edit_category', 'create_type', 'edit_type', 'create_credtype', 'edit_credtype', 'create_purpose', 'edit_purpose'];
+    $deletions = ['delete_selected_categories', 'delete_selected_types', 'delete_selected_credtypes', 'delete_selected_purposes'];
 
     if (in_array($do, $mutations, true) && !$canManage) {
         require __DIR__ . '/../403.php';
@@ -220,6 +220,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         redirect(BASE_URL . '/categories/index.php');
     }
+
+    if ($do === 'create_purpose') {
+        $name = trim($_POST['name'] ?? '');
+        if ($name === '') {
+            flash('error', 'Sub Type name is required.');
+        } else {
+            try {
+                $db->prepare('INSERT INTO project_purposes (name) VALUES (:name)')->execute(['name' => $name]);
+                flash('success', 'Sub Type created.');
+            } catch (PDOException $e) {
+                flash('error', 'A Sub Type with that name already exists.');
+            }
+        }
+        redirect(BASE_URL . '/categories/index.php');
+    }
+
+    if ($do === 'edit_purpose') {
+        $id = (int) ($_POST['id'] ?? 0);
+        $name = trim($_POST['name'] ?? '');
+        if ($name === '') {
+            flash('error', 'Sub Type name is required.');
+        } else {
+            try {
+                $db->prepare('UPDATE project_purposes SET name = :name WHERE id = :id')->execute(['name' => $name, 'id' => $id]);
+                flash('success', 'Sub Type updated.');
+            } catch (PDOException $e) {
+                flash('error', 'A Sub Type with that name already exists.');
+            }
+        }
+        redirect(BASE_URL . '/categories/index.php');
+    }
+
+    if ($do === 'delete_selected_purposes') {
+        $ids = array_map('intval', $_POST['ids'] ?? []);
+        if ($ids) {
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $db->prepare("DELETE FROM project_purposes WHERE id IN ($placeholders)")->execute($ids);
+            flash('success', count($ids) . ' Sub Type' . (count($ids) === 1 ? '' : 's') . ' deleted.');
+        } else {
+            flash('error', 'Nothing selected.');
+        }
+        redirect(BASE_URL . '/categories/index.php');
+    }
 }
 
 $categories = $db->query(
@@ -255,9 +298,17 @@ $credTypes = $db->query(
       ORDER BY ct.name"
 )->fetchAll();
 
+$purposes = $db->query(
+    "SELECT pp.id, pp.name,
+            (SELECT COUNT(*) FROM projects p WHERE p.role = pp.name) AS project_count
+       FROM project_purposes pp
+      ORDER BY pp.name"
+)->fetchAll();
+
 $editCategoryId = isset($_GET['edit_category']) ? (int) $_GET['edit_category'] : 0;
 $editTypeId = isset($_GET['edit_type']) ? (int) $_GET['edit_type'] : 0;
 $editCredTypeId = isset($_GET['edit_credtype']) ? (int) $_GET['edit_credtype'] : 0;
+$editPurposeId = isset($_GET['edit_purpose']) ? (int) $_GET['edit_purpose'] : 0;
 
 $editCategory = null;
 foreach ($categories as $c) {
@@ -277,6 +328,13 @@ $editCredType = null;
 foreach ($credTypes as $ct) {
     if ((int) $ct['id'] === $editCredTypeId) {
         $editCredType = $ct;
+        break;
+    }
+}
+$editPurpose = null;
+foreach ($purposes as $pp) {
+    if ((int) $pp['id'] === $editPurposeId) {
+        $editPurpose = $pp;
         break;
     }
 }
@@ -528,6 +586,78 @@ require __DIR__ . '/../includes/header.php';
     </div>
 </details>
 
+<details class="vault-group" open>
+    <summary class="vault-group__summary">
+        <span class="card__title">Project Sub Types</span>
+    </summary>
+    <div style="padding:16px 20px">
+        <p class="muted" style="margin:0 0 12px">A more specific name within a project's Category/Type (e.g. Data Collection, E-commerce, Login System) -- also what the <a href="<?= BASE_URL ?>/projects/roles.php">Project Roles</a> page scopes Credential Roles by, alongside Category and Type.</p>
+
+        <?php if ($purposes): ?>
+            <form method="post" action="index.php" onsubmit="return confirm('Delete the selected Sub Types? Projects already using them keep their label, but it won\'t be offered going forward.');">
+                <?= csrf_field() ?>
+                <input type="hidden" name="do" value="delete_selected_purposes">
+                <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <?php if ($isAdmin): ?><th style="width:36px"><input type="checkbox" id="purpose-check-all"></th><?php endif; ?>
+                            <th>Sub Type</th>
+                            <th>Projects</th>
+                            <?php if ($canManage): ?><th class="table__actions">Actions</th><?php endif; ?>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($purposes as $pp): ?>
+                        <tr>
+                            <?php if ($isAdmin): ?><td><input type="checkbox" name="ids[]" value="<?= (int) $pp['id'] ?>" class="purpose-check"></td><?php endif; ?>
+                            <td>🎯 <?= e($pp['name']) ?></td>
+                            <td><?= (int) $pp['project_count'] ?> project<?= (int) $pp['project_count'] === 1 ? '' : 's' ?></td>
+                            <?php if ($canManage): ?>
+                                <td class="table__actions"><a class="btn btn--small btn--ghost" href="index.php?edit_purpose=<?= (int) $pp['id'] ?>#edit-purpose">✏️ Edit</a></td>
+                            <?php endif; ?>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <?php if ($isAdmin): ?>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn--danger btn--small">Delete selected</button>
+                    </div>
+                <?php endif; ?>
+            </form>
+        <?php else: ?>
+            <p class="muted">No Sub Types yet.</p>
+        <?php endif; ?>
+
+        <?php if ($canManage): ?>
+            <?php if ($editPurpose): ?>
+                <form method="post" action="index.php" id="edit-purpose" style="margin-top:18px;padding-top:18px;border-top:1px solid var(--border)">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="do" value="edit_purpose">
+                    <input type="hidden" name="id" value="<?= (int) $editPurpose['id'] ?>">
+                    <p class="muted" style="margin:0 0 8px">Editing "<?= e($editPurpose['name']) ?>"</p>
+                    <div class="form-inline-row">
+                        <input type="text" name="name" value="<?= e($editPurpose['name']) ?>" required style="flex:2">
+                        <button type="submit" class="btn btn--small btn--primary">Save changes</button>
+                        <a class="btn btn--small btn--ghost" href="index.php">Cancel</a>
+                    </div>
+                </form>
+            <?php else: ?>
+                <form method="post" action="index.php" style="margin-top:18px;padding-top:18px;border-top:1px solid var(--border)">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="do" value="create_purpose">
+                    <div class="form-inline-row">
+                        <input type="text" name="name" placeholder="New Sub Type name…" required style="flex:2">
+                        <button type="submit" class="btn btn--small btn--primary">+ Add Sub Type</button>
+                    </div>
+                </form>
+            <?php endif; ?>
+        <?php endif; ?>
+    </div>
+</details>
+
 <script>
     (function () {
         function wireCheckAll(allId, cls) {
@@ -540,6 +670,7 @@ require __DIR__ . '/../includes/header.php';
         wireCheckAll('cat-check-all', '.cat-check');
         wireCheckAll('type-check-all', '.type-check');
         wireCheckAll('credtype-check-all', '.credtype-check');
+        wireCheckAll('purpose-check-all', '.purpose-check');
     })();
 </script>
 

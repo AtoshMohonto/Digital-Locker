@@ -96,70 +96,108 @@ foreach ($passwords as &$row) {
 unset($row);
 
 /**
- * Render one credential row. Shared between the flat table and every
- * collapsible group so the markup only lives in one place.
+ * Render one collapsible group as a table whose "System" and "Category" cells
+ * are span-merged across consecutive rows that share the same value: five
+ * logins for one system render as a single System cell plus a single Category
+ * cell, followed by the per-account Role / Username / Email / Password /
+ * Actions rows. Used for the Vault's default view and every grouped view.
  */
-function renderPasswordRow(array $row): void
+function renderMergedPasswordTable(array $rows): void
 {
-    $canAccess = canAccessCredential((int) $row['id']);
+    // Rowspan run lengths for the two merged columns, keyed by start index.
+    $runLengths = function (array $rows, string $col): array {
+        $field = $col === 'system'
+            ? static fn ($r) => $r['project_id'] ? (string) $r['project_name'] : ''
+            : static fn ($r) => (string) $r['category'];
+        $runs = [];
+        $n = count($rows);
+        for ($i = 0; $i < $n;) {
+            $v = $field($rows[$i]);
+            $j = $i + 1;
+            while ($j < $n && $field($rows[$j]) === $v) { $j++; }
+            $runs[$i] = $j - $i;
+            $i = $j;
+        }
+        return $runs;
+    };
+    $systemRuns   = $runLengths($rows, 'system');
+    $categoryRuns = $runLengths($rows, 'category');
+
     // A multi-role credential is repeated across several groups in grouped
     // views, so the same id would otherwise produce duplicate DOM ids --
     // suffix every occurrence after the first to keep reveal targeting correct.
     static $seen = [];
-    $seen[$row['id']] = ($seen[$row['id']] ?? -1) + 1;
-    $domId = 'secret-row-' . (int) $row['id'] . ($seen[$row['id']] > 0 ? '-' . $seen[$row['id']] : '');
-    ?>
-    <?php
-    $loginRole = extractLoginRole($row['title']);
-    $hasLoginRole = $loginRole !== $row['title'];
-    ?>
-    <tr>
-        <td><strong><a href="view.php?id=<?= (int) $row['id'] ?>"><?= categoryIcon((string) $row['category']) ?> <?= e($row['title']) ?></a></strong></td>
-        <td><?= $hasLoginRole ? '<span class="badge badge--role">' . e($loginRole) . '</span>' : '—' ?></td>
-        <td><?= $row['category'] ? '<a href="index.php?category=' . urlencode($row['category']) . '">' . e($row['category']) . '</a>' : '—' ?></td>
-        <td><?= $row['project_name'] ? '<a href="' . BASE_URL . '/projects/view.php?id=' . (int) $row['project_id'] . '">' . e($row['project_name']) . '</a>' : '—' ?></td>
-        <td>
-            <?php if ($row['username']): ?>
-                <?= e($row['username']) ?>
-                <button type="button" class="btn btn--small btn--ghost copy-text-btn" data-copy="<?= e($row['username']) ?>" title="Copy username">📋</button>
-            <?php else: ?>
-                —
+
+    foreach ($rows as $i => $row) {
+        $canAccess = canAccessCredential((int) $row['id']);
+        $seen[$row['id']] = ($seen[$row['id']] ?? -1) + 1;
+        $domId = 'secret-row-' . (int) $row['id'] . ($seen[$row['id']] > 0 ? '-' . $seen[$row['id']] : '');
+        $loginRole = extractLoginRole($row['title']);
+        $hasLoginRole = $loginRole !== $row['title'];
+        ?>
+        <tr>
+            <?php if (isset($systemRuns[$i])): ?>
+                <td<?= $systemRuns[$i] > 1 ? ' rowspan="' . $systemRuns[$i] . '"' : '' ?>>
+                    <?php if ($row['project_id']): ?>
+                        <strong><a href="<?= BASE_URL ?>/projects/view.php?id=<?= (int) $row['project_id'] ?>"><?= e($row['project_name']) ?></a></strong>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </td>
             <?php endif; ?>
-        </td>
-        <td>
-            <?php if ($row['email']): ?>
-                <?= e($row['email']) ?>
-                <button type="button" class="btn btn--small btn--ghost copy-text-btn" data-copy="<?= e($row['email']) ?>" title="Copy email">📋</button>
-            <?php else: ?>
-                —
+            <?php if (isset($categoryRuns[$i])): ?>
+                <td<?= $categoryRuns[$i] > 1 ? ' rowspan="' . $categoryRuns[$i] . '"' : '' ?>>
+                    <?php if ($row['category']): ?>
+                        <?= categoryIcon((string) $row['category']) ?> <a href="index.php?category=<?= urlencode($row['category']) ?>"><?= e($row['category']) ?></a>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </td>
             <?php endif; ?>
-        </td>
-        <td>
-            <?php if ($canAccess): ?>
-                <span class="secret secret--row" id="<?= e($domId) ?>">••••••••</span>
-                <?php if (hasPermission('passwords.view')): ?>
-                    <button type="button" class="btn btn--small btn--ghost reveal-row-btn" data-url="ajax.php?reveal=<?= (int) $row['id'] ?>" data-target="<?= e($domId) ?>" title="Reveal">👁</button>
-                    <button type="button" class="btn btn--small btn--ghost copy-row-btn" data-url="ajax.php?reveal=<?= (int) $row['id'] ?>" data-target="<?= e($domId) ?>" title="Copy password">📋</button>
+            <td><?= $hasLoginRole ? '<span class="badge badge--role">' . e($loginRole) . '</span>' : '—' ?></td>
+            <td>
+                <?php if ($row['username']): ?>
+                    <a href="view.php?id=<?= (int) $row['id'] ?>" title="<?= e($row['title']) ?>"><?= e($row['username']) ?></a>
+                    <button type="button" class="btn btn--small btn--ghost copy-text-btn" data-copy="<?= e($row['username']) ?>" title="Copy username">📋</button>
+                <?php else: ?>
+                    <a href="view.php?id=<?= (int) $row['id'] ?>" class="muted"><?= e($row['title']) ?></a>
                 <?php endif; ?>
-            <?php else: ?>
-                <span class="muted">🔒 Restricted</span>
-            <?php endif; ?>
-        </td>
-        <td class="table__actions">
-            <?php if ($canAccess && hasPermission('passwords.manage')): ?>
-                <a class="btn btn--small btn--ghost" href="edit.php?id=<?= (int) $row['id'] ?>" title="Edit">✏️</a>
-                <form class="inline-form" method="post" action="delete.php"
-                      onsubmit="return confirm('Delete this credential?');">
-                    <?= csrf_field() ?>
-                    <input type="hidden" name="id" value="<?= (int) $row['id'] ?>">
-                    <button type="submit" class="btn btn--small btn--ghost" title="Delete">🗑</button>
-                </form>
-            <?php elseif (!$canAccess): ?>
-                <span class="muted">—</span>
-            <?php endif; ?>
-        </td>
-    </tr>
-    <?php
+            </td>
+            <td>
+                <?php if ($row['email']): ?>
+                    <?= e($row['email']) ?>
+                    <button type="button" class="btn btn--small btn--ghost copy-text-btn" data-copy="<?= e($row['email']) ?>" title="Copy email">📋</button>
+                <?php else: ?>
+                    —
+                <?php endif; ?>
+            </td>
+            <td>
+                <?php if ($canAccess): ?>
+                    <span class="secret secret--row" id="<?= e($domId) ?>">••••••••</span>
+                    <?php if (hasPermission('passwords.view')): ?>
+                        <button type="button" class="btn btn--small btn--ghost reveal-row-btn" data-url="ajax.php?reveal=<?= (int) $row['id'] ?>" data-target="<?= e($domId) ?>" title="Reveal">👁</button>
+                        <button type="button" class="btn btn--small btn--ghost copy-row-btn" data-url="ajax.php?reveal=<?= (int) $row['id'] ?>" data-target="<?= e($domId) ?>" title="Copy password">📋</button>
+                    <?php endif; ?>
+                <?php else: ?>
+                    <span class="muted">🔒 Restricted</span>
+                <?php endif; ?>
+            </td>
+            <td class="table__actions">
+                <?php if ($canAccess && hasPermission('passwords.manage')): ?>
+                    <a class="btn btn--small btn--ghost" href="edit.php?id=<?= (int) $row['id'] ?>" title="Edit">✏️</a>
+                    <form class="inline-form" method="post" action="delete.php"
+                          onsubmit="return confirm('Delete this credential?');">
+                        <?= csrf_field() ?>
+                        <input type="hidden" name="id" value="<?= (int) $row['id'] ?>">
+                        <button type="submit" class="btn btn--small btn--ghost" title="Delete">🗑</button>
+                    </form>
+                <?php elseif (!$canAccess): ?>
+                    <span class="muted">—</span>
+                <?php endif; ?>
+            </td>
+        </tr>
+        <?php
+    }
 }
 
 /**
@@ -287,7 +325,7 @@ require __DIR__ . '/../includes/header.php';
                 <a class="btn" href="import.php">Import CSV</a>
                 <a class="btn" href="export.php">Export CSV</a>
             <?php endif; ?>
-            <?php if (hasPermission('passwords.manage')): ?>
+            <?php if (canCreateCredentials()): ?>
                 <a class="btn btn--ghost" href="bulk_create.php">Bulk Add</a>
                 <a class="btn btn--primary" href="create.php">+ New Credential</a>
             <?php endif; ?>
@@ -341,8 +379,7 @@ require __DIR__ . '/../includes/header.php';
         <div class="form-group">
             <label for="group">Group by</label>
             <select id="group" name="group">
-                <option value="">Flat list</option>
-                <option value="project" <?= $groupBy === 'project' ? 'selected' : '' ?>>Project</option>
+                <option value="">System (default, by project)</option>
                 <option value="category" <?= $groupBy === 'category' ? 'selected' : '' ?>>Category</option>
                 <option value="type" <?= $groupBy === 'type' ? 'selected' : '' ?>>Type</option>
                 <option value="role" <?= $groupBy === 'role' ? 'selected' : '' ?>>Access level</option>
@@ -366,9 +403,8 @@ require __DIR__ . '/../includes/header.php';
                 <thead>
                     <tr>
                         <th>System</th>
-                        <th>Role</th>
                         <th>Category</th>
-                        <th>Project</th>
+                        <th>Role</th>
                         <th>Username</th>
                         <th>Email</th>
                         <th>Password</th>
@@ -376,9 +412,7 @@ require __DIR__ . '/../includes/header.php';
                     </tr>
                 </thead>
                 <tbody>
-                <?php foreach ($rows as $row): ?>
-                    <?php renderPasswordRow($row); ?>
-                <?php endforeach; ?>
+                <?php renderMergedPasswordTable($rows); ?>
                 </tbody>
             </table>
             </div>
@@ -397,26 +431,25 @@ require __DIR__ . '/../includes/header.php';
 
     <?php if (!$passwords): ?>
         <p class="muted">No credentials match your filters.</p>
-    <?php elseif ($groupBy === ''): ?>
-        <?php if (hasPermission('passwords.view')): ?>
-            <div class="group-controls">
-                <button type="button" class="btn btn--small btn--ghost" id="reveal-all-btn">👁 Reveal All</button>
-                <button type="button" class="btn btn--small btn--ghost" id="hide-all-btn">🙈 Hide All</button>
-            </div>
-        <?php endif; ?>
-        <?php renderPasswordSet($passwords, $viewMode); ?>
     <?php else: ?>
         <?php
+        // The default view (no group selected) renders as collapsible groups
+        // keyed by the SYSTEM (which is the owning project, merged across a
+        // project's accounts) -- same collapsible pattern as Credential
+        // Assignments. Choosing any other grouping switches the whole layout
+        // to those keys instead.
+        $groupKey = $groupBy === '' ? 'project' : $groupBy;
+        $groupIcons = ['project' => '📁', 'category' => '🏷', 'type' => '🎭', 'role' => '🛡', 'date' => '📅'];
         $groups = [];
         foreach ($passwords as $row) {
-            foreach (groupKeysFor($row, $groupBy) as [$key, $label]) {
+            foreach (groupKeysFor($row, $groupKey) as [$key, $label]) {
                 if (!isset($groups[$key])) {
-                    $groups[$key] = ['label' => $label, 'rows' => []];
+                    $groups[$key] = ['label' => $label, 'icon' => $groupIcons[$groupKey] ?? '', 'rows' => []];
                 }
                 $groups[$key]['rows'][] = $row;
             }
         }
-        if ($groupBy === 'date') {
+        if ($groupKey === 'date') {
             krsort($groups); // key = 'YYYY-MM-DD' -- newest day first, not alphabetical.
         } else {
             uasort($groups, static fn ($a, $b) => strcasecmp($a['label'], $b['label']));
@@ -435,7 +468,7 @@ require __DIR__ . '/../includes/header.php';
         <?php foreach ($groups as $group): ?>
             <details class="vault-group" open>
                 <summary class="vault-group__summary">
-                    <span><?= e($group['label']) ?></span>
+                    <span><?= e($group['icon']) ?> <?= e($group['label']) ?></span>
                     <span class="badge badge--role"><?= count($group['rows']) ?></span>
                 </summary>
                 <?php renderPasswordSet($group['rows'], $viewMode); ?>

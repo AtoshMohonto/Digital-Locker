@@ -412,6 +412,124 @@ function rememberCredentialType(string $name): void
 }
 
 /**
+ * Splits a role input into distinct names: "Admin, Editor ,  Support" becomes
+ * ['Admin', 'Editor', 'Support']. Used by any field where roles can be typed
+ * in comma-separated ("one role, or several at once"). Empty tokens dropped.
+ * Each name is capped to 60 chars -- the width of both project_roles.name and
+ * credential_types.name -- so PHP enforces the limit instead of leaving it to
+ * the database's (non-strict, silently-truncating) column width.
+ */
+function splitRoleNames(string $input): array
+{
+    $names = [];
+    foreach (explode(',', $input) as $part) {
+        $part = trim($part);
+        if ($part === '') {
+            continue;
+        }
+        $part = mb_substr($part, 0, 60);
+        $names[$part] = true;
+    }
+    return array_values(array_keys(array_slice($names, 0, 50, true)));
+}
+
+/**
+ * Roles defined for a project's credentials (e.g. "Admin", "Teacher") -- the
+ * only roles a credential created under this project may pick, and what an
+ * admin/manager selects or creates on the New/Edit Project form. Deliberately
+ * separate from Digital Locker's own RBAC roles (roles/password_roles) and
+ * from the project's internal Team (project_members manager/tester rows).
+ */
+function projectCredentialRoles(int $projectId): array
+{
+    global $db;
+    $stmt = $db->prepare('SELECT name FROM project_roles WHERE project_id = :pid ORDER BY name');
+    $stmt->execute(['pid' => $projectId]);
+    return array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+}
+
+/**
+ * A project's Type(s) -- a project can carry more than one at once (e.g. Web
+ * App + Mobile App), checkbox-picked on the New/Edit Project form same as
+ * Credential Roles. project_type_links is the source of truth; projects.type
+ * (the old single-value column) is left alone and unused going forward.
+ */
+function projectTypesFor(int $projectId): array
+{
+    global $db;
+    $stmt = $db->prepare('SELECT type_name FROM project_type_links WHERE project_id = :pid ORDER BY type_name');
+    $stmt->execute(['pid' => $projectId]);
+    return array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+}
+
+/**
+ * Credential roles already set up (via the Project Roles page) for OTHER
+ * projects sharing this exact Category + (any of these Types) + Sub Type --
+ * the New/Edit Project form's Credential Roles checkbox list is scoped to
+ * this instead of showing the entire global catalog, so it reflects "what's
+ * already in use for this kind of project" rather than every role name ever
+ * typed anywhere. A project can carry several Types at once, so this takes
+ * the whole set and matches on any of them.
+ */
+function projectContextCredentialRoles(string $category, array $types, string $subType): array
+{
+    global $db;
+    if (!$types) {
+        return [];
+    }
+    $placeholders = implode(',', array_fill(0, count($types), '?'));
+    $stmt = $db->prepare(
+        "SELECT DISTINCT pr.name FROM project_roles pr
+           JOIN projects p ON p.id = pr.project_id
+           JOIN project_type_links ptl ON ptl.project_id = p.id
+          WHERE p.category = ? AND ptl.type_name IN ($placeholders) AND p.role = ?
+          ORDER BY pr.name"
+    );
+    $stmt->execute(array_merge([$category], array_values($types), [$subType]));
+    return array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+}
+
+/**
+ * Every Category+Type+Sub Type combination already in use, mapped to the
+ * credential roles set up for it -- lets the New/Edit Project form's
+ * Credential Roles checkboxes re-scope live in JS as Category/Type/Sub Type
+ * are typed or checked, the same way projectPurposesByContext() re-scopes the
+ * Sub Type suggestions. A project with several Types contributes one row per
+ * Type here, so it lands under each of its Type's keys.
+ */
+function projectRolesByContext(): array
+{
+    global $db;
+    $map = [];
+    $rows = $db->query(
+        'SELECT DISTINCT p.category, ptl.type_name AS type, p.role AS subtype, pr.name
+           FROM project_roles pr
+           JOIN projects p ON p.id = pr.project_id
+           JOIN project_type_links ptl ON ptl.project_id = p.id'
+    )->fetchAll();
+    foreach ($rows as $row) {
+        $key = $row['category'] . '|' . $row['type'] . '|' . $row['subtype'];
+        $map[$key][] = (string) $row['name'];
+    }
+    foreach ($map as &$names) {
+        $names = array_values(array_unique($names));
+        usort($names, 'strcasecmp');
+    }
+    unset($names);
+    return $map;
+}
+
+/**
+ * Whether the current user may add credentials at all (single or bulk).
+ * Testers hold the create-only passwords.create permission; everyone with
+ * passwords.manage already can.
+ */
+function canCreateCredentials(): bool
+{
+    return hasPermission('passwords.manage') || hasPermission('passwords.create');
+}
+
+/**
  * Project Category and Type are now free-text-with-suggestions on the New/
  * Edit Project form (select an existing one, or just type a new one) rather
  * than a fixed dropdown -- a typed value gets remembered into the same
@@ -463,17 +581,43 @@ function rememberProjectPurpose(string $name): void
 }
 
 /**
+ * Project "Client": who the project is being done for (e.g. a freelance
+ * client's name or company). Same free-text-with-suggestions catalog
+ * pattern as Category/Type/Sub Type.
+ */
+function projectClientOptions(): array
+{
+    global $db;
+    return $db->query('SELECT name FROM project_clients ORDER BY name')->fetchAll(PDO::FETCH_COLUMN);
+}
+
+/** Remembers a newly-typed Client so it shows up as a suggestion next time. */
+function rememberProjectClient(string $name): void
+{
+    if ($name === '') {
+        return;
+    }
+    global $db;
+    $db->prepare('INSERT IGNORE INTO project_clients (name) VALUES (:name)')->execute(['name' => $name]);
+}
+
+/**
  * Every Role value already used on a project, grouped by that project's
  * (category, type) pair -- so the Role datalist on the form can be
  * narrowed to "what's usually picked for a Freelancing + Web App project"
- * instead of the whole flat catalog every time.
+ * instead of the whole flat catalog every time. A project with several Types
+ * contributes one row per Type, landing under each of its Type's keys.
  */
 function projectPurposesByContext(): array
 {
     global $db;
     $map = [];
     $rows = $db->query(
-        "SELECT DISTINCT category, type, role FROM projects WHERE role != '' ORDER BY role"
+        "SELECT DISTINCT p.category, ptl.type_name AS type, p.role
+           FROM projects p
+           JOIN project_type_links ptl ON ptl.project_id = p.id
+          WHERE p.role != ''
+          ORDER BY p.role"
     )->fetchAll();
     foreach ($rows as $row) {
         $key = $row['category'] . '|' . $row['type'];
